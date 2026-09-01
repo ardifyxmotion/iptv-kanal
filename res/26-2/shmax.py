@@ -1,51 +1,46 @@
-import requests
-import re
-import json
+name: ShowMax IPTV
 
-URL = "https://www.showmax.com.tr/canliyayin/"
+on:
+schedule:
+- cron: "16 */2 * * *"
+workflow_dispatch:
 
-headers = {
-    "User-Agent": "Mozilla/5.0"
-}
+permissions:
+contents: write
 
-print("ShowMax canlı yayın sayfası kontrol ediliyor...")
+jobs:
+update:
+runs-on: ubuntu-latest
 
-response = requests.get(URL, headers=headers, timeout=15)
-response.raise_for_status()
+```
+steps:
+  - name: Depoyu indir
+    uses: actions/checkout@v4
 
-html = response.text
+  - name: Python kur
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.x"
 
-# Sayfadaki doğrudan M3U8 bağlantılarını ara
-m3u8_links = re.findall(
-    r'https?://[^"\'\\\s]+?\.m3u8[^"\'\\\s]*',
-    html
-)
+  - name: Gerekli kütüphaneleri yükle
+    run: |
+      pip install requests
 
-# JSON içindeki src alanlarını da kontrol et
-if not m3u8_links:
-    src_matches = re.findall(
-        r'"src"\s*:\s*"([^"]+\.m3u8[^"]*)"',
-        html
-    )
+  - name: ShowMax M3U8 güncelle
+    run: |
+      python res/26-2/shmax.py > res/26-2/shmax.m3u8
 
-    for link in src_matches:
-        link = link.replace("\\/", "/")
-        m3u8_links.append(link)
+  - name: Değişiklikleri kaydet
+    run: |
+      git config --global user.name "github-actions[bot]"
+      git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-if m3u8_links:
-    m3u8_url = m3u8_links[0]
+      git add res/26-2/shmax.m3u8
 
-    print(f"Bulunan M3U8: {m3u8_url}")
-
-    playlist = requests.get(
-        m3u8_url,
-        headers=headers,
-        timeout=15
-    )
-
-    playlist.raise_for_status()
-
-    print(playlist.text)
-
-else:
-    print("M3U8 bağlantısı sayfa kaynağında bulunamadı.")
+      if git diff --cached --quiet; then
+        echo "Değişiklik yok."
+      else
+        git commit -m "shmax updated"
+        git push
+      fi
+```

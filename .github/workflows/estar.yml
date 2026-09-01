@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Repository'i indir
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -41,12 +43,16 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Önce uzak depodaki son değişiklikleri al
+          git pull --rebase origin main
+
+          # Yeni M3U8 dosyasını ekle
           git add res/26-2/estar.m3u8
 
+          # Değişiklik varsa commit oluştur
           if git diff --cached --quiet; then
             echo "Değişiklik yok."
           else
-            git pull --rebase origin main
             git commit -m "estar updated"
             git push origin main
           fi

@@ -1,24 +1,19 @@
 import sys
-from urllib.parse import urlparse
-
 from playwright.sync_api import sync_playwright
 
-
 PAGE_URL = "https://www.atvavrupa.tv/canli-yayin"
-
-
-def log(message):
-    print(message, file=sys.stderr)
+TARGET_HOST = "trkvz-live.ercdn.net"
 
 
 def main():
-    m3u8_urls = []
-    relevant_requests = []
+    found_urls = []
 
-    log("ATV Avrupa canlı yayın sayfası açılıyor...")
+    print(
+        "ATV Avrupa canlı yayın sayfası açılıyor...",
+        file=sys.stderr
+    )
 
     with sync_playwright() as p:
-
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -29,68 +24,31 @@ def main():
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={
-                "width": 1920,
-                "height": 1080
-            }
+            )
         )
 
         page = context.new_page()
 
-        def handle_request(request):
-            url = request.url
+        def check_url(url):
             lower_url = url.lower()
-
-            interesting = (
-                "ercdn.net" in lower_url
-                or ".m3u8" in lower_url
-                or "atvavrupa" in lower_url
-                or "live" in lower_url
-                or "player" in lower_url
-                or "video" in lower_url
-            )
-
-            if interesting and url not in relevant_requests:
-                relevant_requests.append(url)
-
-                log(f"[REQUEST] {request.method} {url}")
-
-        def handle_response(response):
-            url = response.url
-            lower_url = url.lower()
-
-            interesting = (
-                "ercdn.net" in lower_url
-                or ".m3u8" in lower_url
-                or "atvavrupa" in lower_url
-                or "live" in lower_url
-                or "player" in lower_url
-                or "video" in lower_url
-            )
-
-            if interesting:
-                log(
-                    f"[RESPONSE] {response.status} "
-                    f"{response.request.method} {url}"
-                )
 
             if (
-                "trkvz-live.ercdn.net" in lower_url
-                and ".m3u8" in lower_url
+                TARGET_HOST in lower_url
                 and "atvavrupa" in lower_url
+                and ".m3u8" in lower_url
             ):
+                if url not in found_urls:
+                    found_urls.append(url)
 
-                if url not in m3u8_urls:
-                    m3u8_urls.append(url)
+                    print(
+                        f"ATV Avrupa M3U8 bulundu: {url}",
+                        file=sys.stderr
+                    )
 
-                    log(f"[M3U8 BULUNDU] {url}")
-
-        page.on("request", handle_request)
-        page.on("response", handle_response)
+        page.on("request", lambda request: check_url(request.url))
+        page.on("response", lambda response: check_url(response.url))
 
         try:
             page.goto(
@@ -99,120 +57,52 @@ def main():
                 timeout=60000
             )
 
-            log("Ana sayfa yüklendi.")
+            print(
+                "Yayın oynatıcısının yüklenmesi bekleniyor...",
+                file=sys.stderr
+            )
 
-            page.wait_for_timeout(10000)
+            page.wait_for_timeout(5000)
 
-            log("Sayfadaki frame'ler kontrol ediliyor...")
+            try:
+                page.evaluate("""
+                    () => {
+                        document.querySelectorAll('video').forEach(video => {
+                            video.muted = true;
+                            video.play().catch(() => {});
+                        });
+                    }
+                """)
+            except Exception:
+                pass
 
-            for frame in page.frames:
-
-                try:
-                    log(f"[FRAME] {frame.url}")
-
-                    sources = frame.evaluate("""
-                        () => {
-                            const result = [];
-
-                            document
-                                .querySelectorAll(
-                                    'video, source, iframe'
-                                )
-                                .forEach(element => {
-
-                                    if (element.src) {
-                                        result.push(element.src);
-                                    }
-
-                                    const src =
-                                        element.getAttribute('src');
-
-                                    if (src) {
-                                        result.push(src);
-                                    }
-                                });
-
-                            return result;
-                        }
-                    """)
-
-                    for source in sources:
-
-                        if source:
-                            log(
-                                f"[ELEMENT SOURCE] {source}"
-                            )
-
-                except Exception as e:
-                    log(f"Frame kontrol hatası: {e}")
-
-            log("Video oynatma işlemi deneniyor...")
-
-            for frame in page.frames:
-
-                try:
-                    frame.evaluate("""
-                        () => {
-                            document
-                                .querySelectorAll('video')
-                                .forEach(video => {
-
-                                    video.muted = true;
-
-                                    video.play()
-                                        .catch(() => {});
-                                });
-                        }
-                    """)
-
-                except Exception:
-                    pass
-
-            page.wait_for_timeout(30000)
-
-            log("Performance kaynakları kontrol ediliyor...")
-
-            resources = page.evaluate("""
-                () => performance
-                    .getEntriesByType('resource')
-                    .map(item => item.name)
-            """)
-
-            for resource in resources:
-
-                lower_resource = resource.lower()
-
-                if (
-                    "ercdn.net" in lower_resource
-                    or ".m3u8" in lower_resource
-                    or "atvavrupa" in lower_resource
-                ):
-                    log(f"[PERFORMANCE] {resource}")
+            page.wait_for_timeout(20000)
 
         except Exception as e:
-
-            log(f"SAYFA HATASI: {e}")
+            print(
+                f"Sayfa yükleme hatası: {e}",
+                file=sys.stderr
+            )
 
         browser.close()
 
-    log("")
-    log("========== BULUNAN M3U8 URL'LERİ ==========")
-
-    for url in m3u8_urls:
-        log(url)
-
-    log("===========================================")
-
-    if not m3u8_urls:
-
-        log("ATV Avrupa M3U8 bağlantısı bulunamadı.")
-
+    if not found_urls:
+        print(
+            "ATV Avrupa M3U8 bağlantısı bulunamadı.",
+            file=sys.stderr
+        )
         sys.exit(1)
 
-    # Şimdilik son bulunan gerçek URL kullanılır.
-    best_url = m3u8_urls[-1]
+    best_url = None
 
-    # SADECE BU KISIM STDOUT'A YAZILIR
+    for url in found_urls:
+        if "atvavrupa_576p.m3u8" in url.lower():
+            best_url = url
+            break
+
+    if not best_url:
+        best_url = found_urls[0]
+
     print("#EXTM3U")
     print('#EXTINF:-1 tvg-name="ATV Avrupa",ATV AVRUPA')
     print(best_url)

@@ -1,8 +1,9 @@
-name: ATV Avrupa M3U8
+name: Update ATV Avrupa M3U8
 
 on:
   schedule:
     - cron: "16 */2 * * *"
+
   workflow_dispatch:
 
 permissions:
@@ -13,37 +14,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository indir
+      - name: Repository'i indir
         uses: actions/checkout@v4
 
       - name: Python kur
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.12"
 
-      - name: Requests yükle
-        run: pip install requests
+      - name: Playwright yükle
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
 
-      - name: ATV Avrupa M3U8 al
+      - name: ATV Avrupa M3U8 bul
         run: |
           python res/26-2/avrupa.py > res/26-2/avrupa.m3u8
 
-      - name: Değişiklikleri kontrol et
-        id: git_check
+      - name: Bulunan bağlantıyı kontrol et
         run: |
+          echo "Oluşturulan M3U8 dosyası:"
+          cat res/26-2/avrupa.m3u8
+
+      - name: Değişiklikleri GitHub'a gönder
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add res/26-2/avrupa.m3u8
 
           if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Değişiklik yok."
           else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git commit -m "avrupa updated"
+            git push
           fi
-
-      - name: GitHub'a kaydet
-        if: steps.git_check.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git commit -m "ATV Avrupa M3U8 güncellendi"
-          git push

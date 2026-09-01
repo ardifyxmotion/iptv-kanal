@@ -1,4 +1,4 @@
-name: Update ATV AVRUPA M3U8
+name: ATV Avrupa M3U8
 
 on:
   schedule:
@@ -9,38 +9,41 @@ permissions:
   contents: write
 
 jobs:
-  update-m3u8:
+  update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Depoyu indir
+      - name: Repository indir
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Python kur
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Gerekli kütüphaneleri yükle
-        run: |
-          pip install requests
+      - name: Requests yükle
+        run: pip install requests
 
-      - name: ATV Avrupa M3U8 güncelle
+      - name: ATV Avrupa M3U8 al
         run: |
           python res/26-2/avrupa.py > res/26-2/avrupa.m3u8
 
-      - name: Değişiklikleri GitHub'a gönder
+      - name: Değişiklikleri kontrol et
+        id: git_check
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add res/26-2/avrupa.m3u8
 
           if git diff --cached --quiet; then
-            echo "Değişiklik bulunamadı."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "ATV Avrupa M3U8 güncellendi"
-            git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: GitHub'a kaydet
+        if: steps.git_check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "ATV Avrupa M3U8 güncellendi"
+          git push

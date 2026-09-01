@@ -1,46 +1,54 @@
-name: ShowMax IPTV
+import requests
+import re
+import html
 
-on:
-schedule:
-- cron: "16 */2 * * *"
-workflow_dispatch:
+url = "https://www.showmax.com.tr/canliyayin/"
 
-permissions:
-contents: write
+headers = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-jobs:
-update:
-runs-on: ubuntu-latest
+print("ShowMax canlı yayın sayfası kontrol ediliyor...", flush=True)
 
-```
-steps:
-  - name: Depoyu indir
-    uses: actions/checkout@v4
+response = requests.get(
+    url,
+    headers=headers,
+    timeout=20
+)
 
-  - name: Python kur
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.x"
+response.raise_for_status()
 
-  - name: Gerekli kütüphaneleri yükle
-    run: |
-      pip install requests
+source = html.unescape(response.text)
 
-  - name: ShowMax M3U8 güncelle
-    run: |
-      python res/26-2/shmax.py > res/26-2/shmax.m3u8
+# showmax_1080p.m3u8 şeklindeki imzalı bağlantıyı ara
+pattern = (
+    r'https?[^"\'\\\s]+'
+    r'ciner-live\.ercdn\.net'
+    r'[^"\'\\\s]+'
+    r'showmax_1080p\.m3u8'
+    r'\?[^"\'\\\s<]+'
+)
 
-  - name: Değişiklikleri kaydet
-    run: |
-      git config --global user.name "github-actions[bot]"
-      git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+matches = re.findall(pattern, source)
 
-      git add res/26-2/shmax.m3u8
+if not matches:
+    # JSON içerisinde escape edilmiş bağlantıları da ara
+    source = source.replace("\\/", "/")
 
-      if git diff --cached --quiet; then
-        echo "Değişiklik yok."
-      else
-        git commit -m "shmax updated"
-        git push
-      fi
-```
+    pattern = (
+        r'https?[^"\'\s]+'
+        r'ciner-live\.ercdn\.net'
+        r'[^"\'\s]+'
+        r'showmax_1080p\.m3u8'
+        r'\?[^"\'\s<]+'
+    )
+
+    matches = re.findall(pattern, source)
+
+if matches:
+    m3u8_url = matches[0]
+
+    print(m3u8_url)
+
+else:
+    print("# ShowMax M3U8 bağlantısı bulunamadı.")

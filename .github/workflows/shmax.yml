@@ -1,20 +1,20 @@
-name: ShowMax M3U8 Güncelle
+name: Update ShowMax M3U8
 
 on:
-  workflow_dispatch:
-
   schedule:
     - cron: "16 */2 * * *"
+
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  update-showmax:
+  update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Depoyu indir
+      - name: Repository'i indir
         uses: actions/checkout@v4
 
       - name: Python kur
@@ -22,14 +22,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Requests yükle
-        run: pip install requests
+      - name: Playwright yükle
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
 
-      - name: ShowMax bağlantısını al
+      - name: ShowMax M3U8 bul
         run: |
           python res/26-2/shmax.py > res/26-2/shmax.m3u8
 
-      - name: Dosyayı GitHub'a kaydet
+      - name: Bulunan bağlantıyı kontrol et
+        run: |
+          echo "Oluşturulan M3U8 dosyası:"
+          cat res/26-2/shmax.m3u8
+
+      - name: Değişiklikleri GitHub'a gönder
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -37,8 +44,8 @@ jobs:
           git add res/26-2/shmax.m3u8
 
           if git diff --cached --quiet; then
-            echo "Değişiklik bulunamadı."
+            echo "Değişiklik yok."
           else
-            git commit -m "ShowMax M3U8 güncellendi"
-            git push origin HEAD:main
+            git commit -m "shmax updated"
+            git push
           fi

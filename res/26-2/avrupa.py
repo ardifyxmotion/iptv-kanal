@@ -1,8 +1,10 @@
 import re
 import sys
+import html
 import requests
+from urllib.parse import urljoin
 
-URL = "https://www.atvavrupa.tv/canli-yayin"
+LIVE_PAGE = "https://www.atvavrupa.tv/canli-yayin"
 
 HEADERS = {
     "User-Agent": (
@@ -10,108 +12,168 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     ),
+    "Accept": "*/*",
     "Referer": "https://www.atvavrupa.tv/"
 }
 
 
+def clean_url(url):
+    """JavaScript ve HTML içindeki URL kaçışlarını temizler."""
+    url = html.unescape(url)
+    url = url.replace("\\/", "/")
+    url = url.replace("\\u0026", "&")
+    url = url.replace("\\x26", "&")
+    url = url.replace("\\\\", "\\")
+
+    return url.strip("\"' ")
+
+
 def find_m3u8(text):
-    """Metin içerisinden M3U8 bağlantısını bulur."""
-    
+    """ATV Avrupa'nın güncel imzalı M3U8 bağlantısını arar."""
+
     patterns = [
-        r'https?[^"\'\\\s]+?\.m3u8[^"\'\\\s]*',
-        r'"src"\s*:\s*"([^"]+\.m3u8[^"]*)"',
-        r"'src'\s*:\s*'([^']+\.m3u8[^']*)'",
-        r'source\s*:\s*["\']([^"\']+\.m3u8[^"\']*)',
+        r'https?://trkvz-live\.ercdn\.net/atvavrupa/[^"\'\s<>]+\.m3u8[^"\'\s<>]*',
+        r'["\']([^"\']*trkvz-live\.ercdn\.net[^"\']*atvavrupa[^"\']*\.m3u8[^"\']*)["\']',
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        matches = re.findall(pattern, text, re.IGNORECASE)
 
-        if match:
-            url = match.group(1) if match.lastindex else match.group(0)
+        for match in matches:
+            if isinstance(match, tuple):
+                match = match[0]
 
-            url = (
-                url.replace("\\/", "/")
-                   .replace("\\u0026", "&")
-                   .replace("&amp;", "&")
-            )
+            url = clean_url(match)
 
-            return url
+            if (
+                "trkvz-live.ercdn.net" in url
+                and "atvavrupa" in url
+                and ".m3u8" in url
+            ):
+                return url
 
     return None
 
 
+def get_urls_from_page(text, base_url):
+    """HTML içindeki script ve iframe kaynaklarını çıkarır."""
+
+    urls = set()
+
+    for src in re.findall(
+        r'<script[^>]+src=["\']([^"\']+)["\']',
+        text,
+        re.IGNORECASE
+    ):
+        urls.add(urljoin(base_url, html.unescape(src)))
+
+    for src in re.findall(
+        r'<iframe[^>]+src=["\']([^"\']+)["\']',
+        text,
+        re.IGNORECASE
+    ):
+        full_url = urljoin(base_url, html.unescape(src))
+
+        skip = [
+            "doubleclick",
+            "googlesyndication",
+            "mirriad",
+            "ad01.",
+            "/js/biframe"
+        ]
+
+        if not any(item in full_url.lower() for item in skip):
+            urls.add(full_url)
+
+    return urls
+
+
 def main():
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
     try:
-        print("ATV Avrupa canlı yayın sayfası kontrol ediliyor...", file=sys.stderr)
+        print(
+            "ATV Avrupa canlı yayın sayfası kontrol ediliyor...",
+            file=sys.stderr
+        )
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
-
-        response = session.get(URL, timeout=20)
+        response = session.get(LIVE_PAGE, timeout=30)
         response.raise_for_status()
 
-        # Önce ana sayfada M3U8 ara
+        # Önce ana sayfada ara
         m3u8_url = find_m3u8(response.text)
 
-        # Ana sayfada bulunamazsa iframe bağlantılarını kontrol et
+        # Ardından JavaScript ve iframe kaynaklarını kontrol et
         if not m3u8_url:
-            print("Ana sayfada M3U8 bulunamadı, iframe kontrol ediliyor...", file=sys.stderr)
-
-            iframes = re.findall(
-                r'<iframe[^>]+src=["\']([^"\']+)["\']',
+            resources = get_urls_from_page(
                 response.text,
-                re.IGNORECASE
+                response.url
             )
 
-            for iframe in iframes:
-                if iframe.startswith("//"):
-                    iframe = "https:" + iframe
-                elif iframe.startswith("/"):
-                    iframe = "https://www.atvavrupa.tv" + iframe
+            print(
+                f"{len(resources)} kaynak kontrol ediliyor...",
+                file=sys.stderr
+            )
 
+            for resource_url in resources:
                 try:
-                    print(f"Iframe kontrol ediliyor: {iframe}", file=sys.stderr)
+                    print(
+                        f"Kontrol ediliyor: {resource_url}",
+                        file=sys.stderr
+                    )
 
-                    iframe_response = session.get(
-                        iframe,
+                    resource_response = session.get(
+                        resource_url,
                         headers={
                             **HEADERS,
-                            "Referer": URL
+                            "Referer": response.url
                         },
                         timeout=20
                     )
 
-                    iframe_response.raise_for_status()
+                    if resource_response.status_code != 200:
+                        continue
 
-                    m3u8_url = find_m3u8(iframe_response.text)
+                    m3u8_url = find_m3u8(resource_response.text)
 
                     if m3u8_url:
                         break
 
-                except requests.RequestException as e:
-                    print(f"Iframe hatası: {e}", file=sys.stderr)
+                except requests.RequestException as error:
+                    print(
+                        f"Kaynak atlandı: {error}",
+                        file=sys.stderr
+                    )
 
         if not m3u8_url:
             print(
-                "HATA: M3U8 bağlantısı bulunamadı.",
+                "HATA: ATV Avrupa için güncel M3U8 bağlantısı bulunamadı.",
                 file=sys.stderr
             )
             sys.exit(1)
 
-        print("M3U8 bulundu:", m3u8_url, file=sys.stderr)
+        print(
+            f"Güncel M3U8 bulundu: {m3u8_url}",
+            file=sys.stderr
+        )
 
-        # M3U8 dosyası çıktısı
         print("#EXTM3U")
-        print('#EXTINF:-1 tvg-name="ATV Avrupa",ATV AVRUPA')
+        print('#EXTINF:-1 tvg-name="ATV Avrupa",ATV Avrupa')
         print(m3u8_url)
 
-    except requests.RequestException as e:
-        print(f"İstek hatası: {e}", file=sys.stderr)
+    except requests.RequestException as error:
+        print(
+            f"İstek hatası: {error}",
+            file=sys.stderr
+        )
         sys.exit(1)
 
-    except Exception as e:
-        print(f"Beklenmeyen hata: {e}", file=sys.stderr)
+    except Exception as error:
+        print(
+            f"Beklenmeyen hata: {error}",
+            file=sys.stderr
+        )
         sys.exit(1)
 
 

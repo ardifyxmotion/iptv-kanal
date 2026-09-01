@@ -1,2 +1,3 @@
-ShowMax canlı yayın sayfası kontrol ediliyor...
-# ShowMax M3U8 bağlantısı bulunamadı.
+#EXTM3U
+#EXTINF:-1 tvg-name="ShowMax",SHOWMAX
+https://ciner-live.ercdn.net/showmax/playlist.m3u8?e=1788312079&st=oYKXzeBo_XcSosdi2pTkNA&tv=1

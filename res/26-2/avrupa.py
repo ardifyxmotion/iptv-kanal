@@ -1,39 +1,21 @@
 import sys
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
 
 PAGE_URL = "https://www.atvavrupa.tv/canli-yayin"
 
-TARGET_HOST = "trkvz-live.ercdn.net"
-TARGET_FILE = "atvavrupa_576p.m3u8"
 
-
-def is_valid_target(url):
-    try:
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-
-        return (
-            parsed.scheme == "https"
-            and parsed.netloc.lower() == TARGET_HOST
-            and parsed.path.lower().endswith(TARGET_FILE)
-            and bool(params.get("st"))
-            and bool(params.get("e"))
-        )
-
-    except Exception:
-        return False
+def log(message):
+    print(message, file=sys.stderr)
 
 
 def main():
-    found_urls = []
+    m3u8_urls = []
+    relevant_requests = []
 
-    print(
-        "ATV Avrupa canlı yayın sayfası açılıyor...",
-        file=sys.stderr
-    )
+    log("ATV Avrupa canlı yayın sayfası açılıyor...")
 
     with sync_playwright() as p:
 
@@ -59,104 +41,178 @@ def main():
 
         page = context.new_page()
 
-        def capture_url(url):
+        def handle_request(request):
+            url = request.url
+            lower_url = url.lower()
 
-            if is_valid_target(url):
+            interesting = (
+                "ercdn.net" in lower_url
+                or ".m3u8" in lower_url
+                or "atvavrupa" in lower_url
+                or "live" in lower_url
+                or "player" in lower_url
+                or "video" in lower_url
+            )
 
-                if url not in found_urls:
+            if interesting and url not in relevant_requests:
+                relevant_requests.append(url)
 
-                    found_urls.append(url)
+                log(f"[REQUEST] {request.method} {url}")
 
-                    print(
-                        f"Gerçek yayın URL'si bulundu: {url}",
-                        file=sys.stderr
-                    )
+        def handle_response(response):
+            url = response.url
+            lower_url = url.lower()
 
-        page.on(
-            "request",
-            lambda request: capture_url(request.url)
-        )
+            interesting = (
+                "ercdn.net" in lower_url
+                or ".m3u8" in lower_url
+                or "atvavrupa" in lower_url
+                or "live" in lower_url
+                or "player" in lower_url
+                or "video" in lower_url
+            )
 
-        page.on(
-            "response",
-            lambda response: capture_url(response.url)
-        )
+            if interesting:
+                log(
+                    f"[RESPONSE] {response.status} "
+                    f"{response.request.method} {url}"
+                )
+
+            if (
+                "trkvz-live.ercdn.net" in lower_url
+                and ".m3u8" in lower_url
+                and "atvavrupa" in lower_url
+            ):
+
+                if url not in m3u8_urls:
+                    m3u8_urls.append(url)
+
+                    log(f"[M3U8 BULUNDU] {url}")
+
+        page.on("request", handle_request)
+        page.on("response", handle_response)
 
         try:
-
             page.goto(
                 PAGE_URL,
                 wait_until="domcontentloaded",
                 timeout=60000
             )
 
-            print(
-                "Sayfanın tüm içerikleri yükleniyor...",
-                file=sys.stderr
-            )
+            log("Ana sayfa yüklendi.")
 
             page.wait_for_timeout(10000)
 
-            # Sayfadaki iframe'leri bekle ve incele
+            log("Sayfadaki frame'ler kontrol ediliyor...")
+
             for frame in page.frames:
 
                 try:
+                    log(f"[FRAME] {frame.url}")
 
-                    # Video elementlerini başlat
+                    sources = frame.evaluate("""
+                        () => {
+                            const result = [];
+
+                            document
+                                .querySelectorAll(
+                                    'video, source, iframe'
+                                )
+                                .forEach(element => {
+
+                                    if (element.src) {
+                                        result.push(element.src);
+                                    }
+
+                                    const src =
+                                        element.getAttribute('src');
+
+                                    if (src) {
+                                        result.push(src);
+                                    }
+                                });
+
+                            return result;
+                        }
+                    """)
+
+                    for source in sources:
+
+                        if source:
+                            log(
+                                f"[ELEMENT SOURCE] {source}"
+                            )
+
+                except Exception as e:
+                    log(f"Frame kontrol hatası: {e}")
+
+            log("Video oynatma işlemi deneniyor...")
+
+            for frame in page.frames:
+
+                try:
                     frame.evaluate("""
                         () => {
-                            const videos =
-                                document.querySelectorAll('video');
+                            document
+                                .querySelectorAll('video')
+                                .forEach(video => {
 
-                            videos.forEach(video => {
+                                    video.muted = true;
 
-                                video.muted = true;
-
-                                video.play()
-                                    .catch(() => {});
-                            });
+                                    video.play()
+                                        .catch(() => {});
+                                });
                         }
                     """)
 
                 except Exception:
                     pass
 
-            # Sayfanın ortasına tıklayarak
-            # olası "play" işlemini tetikle
-            try:
-
-                page.mouse.click(
-                    960,
-                    540
-                )
-
-            except Exception:
-                pass
-
-            # Yayın isteğinin başlamasını bekle
             page.wait_for_timeout(30000)
+
+            log("Performance kaynakları kontrol ediliyor...")
+
+            resources = page.evaluate("""
+                () => performance
+                    .getEntriesByType('resource')
+                    .map(item => item.name)
+            """)
+
+            for resource in resources:
+
+                lower_resource = resource.lower()
+
+                if (
+                    "ercdn.net" in lower_resource
+                    or ".m3u8" in lower_resource
+                    or "atvavrupa" in lower_resource
+                ):
+                    log(f"[PERFORMANCE] {resource}")
 
         except Exception as e:
 
-            print(
-                f"Sayfa hatası: {e}",
-                file=sys.stderr
-            )
+            log(f"SAYFA HATASI: {e}")
 
         browser.close()
 
-    if not found_urls:
+    log("")
+    log("========== BULUNAN M3U8 URL'LERİ ==========")
 
-        print(
-            "Gerçek ATV Avrupa M3U8 URL'si bulunamadı.",
-            file=sys.stderr
-        )
+    for url in m3u8_urls:
+        log(url)
+
+    log("===========================================")
+
+    if not m3u8_urls:
+
+        log("ATV Avrupa M3U8 bağlantısı bulunamadı.")
 
         sys.exit(1)
 
-    # En son yakalanan imzalı URL kullanılır
-    best_url = found_urls[-1]
+    # Şimdilik son bulunan gerçek URL kullanılır.
+    best_url = m3u8_urls[-1]
 
+    # SADECE BU KISIM STDOUT'A YAZILIR
     print("#EXTM3U")
     print('#EXTINF:-1 tvg-name="ATV Avrupa",ATV AVRUPA')
     print(best_url)

@@ -1,4 +1,3 @@
-```yaml
 name: Update Eurostar M3U8
 
 on:
@@ -17,12 +16,6 @@ jobs:
     steps:
       - name: Repository'i indir
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Son değişiklikleri al
-        run: |
-          git pull --rebase origin main
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -54,6 +47,5 @@ jobs:
             echo "Değişiklik yok."
           else
             git commit -m "estar updated"
-            git push origin main
+            git push
           fi
-```

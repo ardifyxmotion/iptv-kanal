@@ -1,15 +1,16 @@
-name: ShowMax IPTV
+name: ShowMax M3U8 Güncelle
 
 on:
+workflow_dispatch:
+
 schedule:
 - cron: "16 */2 * * *"
-workflow_dispatch:
 
 permissions:
 contents: write
 
 jobs:
-update:
+update-showmax:
 runs-on: ubuntu-latest
 
 ```
@@ -20,17 +21,16 @@ steps:
   - name: Python kur
     uses: actions/setup-python@v5
     with:
-      python-version: "3.x"
+      python-version: "3.12"
 
-  - name: Gerekli kütüphaneleri yükle
-    run: |
-      pip install requests
+  - name: Requests yükle
+    run: pip install requests
 
-  - name: ShowMax M3U8 güncelle
+  - name: ShowMax bağlantısını al
     run: |
       python res/26-2/shmax.py > res/26-2/shmax.m3u8
 
-  - name: Değişiklikleri kaydet
+  - name: Dosyayı GitHub'a kaydet
     run: |
       git config --global user.name "github-actions[bot]"
       git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -38,9 +38,9 @@ steps:
       git add res/26-2/shmax.m3u8
 
       if git diff --cached --quiet; then
-        echo "Değişiklik yok."
+        echo "Değişiklik bulunamadı."
       else
-        git commit -m "shmax updated"
-        git push
+        git commit -m "ShowMax M3U8 güncellendi"
+        git push origin HEAD:main
       fi
 ```

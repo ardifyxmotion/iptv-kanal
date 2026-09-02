@@ -1,74 +1,72 @@
 import sys
-from urllib.parse import urlparse, parse_qs
-
 from playwright.sync_api import sync_playwright
 
-
 PAGE_URL = "https://www.atvavrupa.tv/canli-yayin"
-TARGET_HOST = "trkvz-live.ercdn.net"
-TARGET_PATH = "/atvavrupa/atvavrupa.m3u8"
-
-
-def log(text):
-    print(text, file=sys.stderr, flush=True)
-
-
-def is_master_playlist(url):
-    try:
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-
-        return (
-            parsed.scheme == "https"
-            and parsed.netloc.lower() == TARGET_HOST
-            and parsed.path == TARGET_PATH
-            and params.get("st")
-            and params.get("e")
-        )
-    except Exception:
-        return False
+TARGET_HOST = "trkvz-live.ercdn.net/atvavrupa/"
 
 
 def main():
-    master_urls = []
+    found_urls = []
 
-    log("ATV Avrupa canlı yayın sayfası açılıyor...")
+    print(
+        "avrupa canlı yayın sayfası açılıyor...",
+        file=sys.stderr
+    )
 
     with sync_playwright() as p:
+
         browser = p.chromium.launch(
             headless=True,
             args=[
-                "--autoplay-policy=no-user-gesture-required",
-                "--disable-blink-features=AutomationControlled"
+                "--autoplay-policy=no-user-gesture-required"
             ]
         )
 
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
                 "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1920, "height": 1080}
+            )
         )
 
         page = context.new_page()
 
-        def capture(url, source):
-            if is_master_playlist(url):
-                if url not in master_urls:
-                    master_urls.append(url)
-                    log(f"[ANA PLAYLIST - {source}] {url}")
+        def handle_request(request):
+            url = request.url.lower()
 
-        page.on(
-            "request",
-            lambda request: capture(request.url, "REQUEST")
-        )
+            if (
+                TARGET_HOST in url
+                and ".m3u8" in url
+                and "avrupa" in url
+            ):
+                if request.url not in found_urls:
+                    found_urls.append(request.url)
 
-        page.on(
-            "response",
-            lambda response: capture(response.url, "RESPONSE")
-        )
+                    print(
+                        f"avrupa M3U8 bulundu: {request.url}",
+                        file=sys.stderr
+                    )
+
+        def handle_response(response):
+            url = response.url.lower()
+
+            if (
+                TARGET_HOST in url
+                and ".m3u8" in url
+                and "avrupa" in url
+            ):
+                if response.url not in found_urls:
+                    found_urls.append(response.url)
+
+                    print(
+                        f"avrupa M3U8 yanıtı bulundu: {response.url}",
+                        file=sys.stderr
+                    )
+
+        page.on("request", handle_request)
+        page.on("response", handle_response)
 
         try:
             page.goto(
@@ -77,62 +75,61 @@ def main():
                 timeout=60000
             )
 
+            print(
+                "Yayın oynatıcısının yüklenmesi bekleniyor...",
+                file=sys.stderr
+            )
+
             page.wait_for_timeout(5000)
 
-            # Tüm iframe'lerdeki video elementlerini başlat.
-            for frame in page.frames:
-                try:
-                    frame.evaluate("""
-                        async () => {
-                            const videos =
-                                document.querySelectorAll("video");
-
-                            for (const video of videos) {
-                                video.muted = true;
-                                await video.play().catch(() => {});
-                            }
-                        }
-                    """)
-                except Exception:
-                    pass
-
-            # Sayfanın farklı noktalarına tıklayarak
-            # olası Play butonunu tetikle.
+            # Video elementlerini oynatmayı dene
             try:
-                page.mouse.click(960, 540)
+                page.evaluate("""
+                    () => {
+                        const videos = document.querySelectorAll('video');
+
+                        videos.forEach(video => {
+                            video.muted = true;
+                            video.play().catch(() => {});
+                        });
+                    }
+                """)
             except Exception:
                 pass
 
-            # Ana manifest isteğinin oluşmasını bekle.
-            page.wait_for_timeout(30000)
+            # Yayın isteğinin oluşmasını bekle
+            page.wait_for_timeout(20000)
 
-            # CDP/Performance kayıtlarından da tara.
-            resources = page.evaluate("""
-                () => performance
-                    .getEntriesByType("resource")
-                    .map(x => x.name)
-            """)
-
-            for url in resources:
-                capture(url, "PERFORMANCE")
-
-        except Exception as error:
-            log(f"HATA: {error}")
+        except Exception as e:
+            print(
+                f"Sayfa yükleme hatası: {e}",
+                file=sys.stderr
+            )
 
         browser.close()
 
-    if not master_urls:
-        log("Ana ATV Avrupa manifesti bulunamadı.")
+    if not found_urls:
+        print(
+            "avrupa M3U8 bağlantısı bulunamadı.",
+            file=sys.stderr
+        )
         sys.exit(1)
 
-    # En son alınan ana manifest.
-    url = master_urls[-1]
+    # Öncelikle 1080p yayını bul
+    best_url = None
 
-    log(f"SEÇİLEN ANA PLAYLIST: {url}")
+    for url in found_urls:
+        if "avrupa_576p.m3u8" in url.lower():
+            best_url = url
+            break
 
+    if not best_url:
+        best_url = found_urls[0]
+
+    # IPTV playlist formatında çıktı oluştur
     print("#EXTM3U")
-    print('#EXTINF:-1 tvg-name="ATV Avrupa",ATV AVRUPA')
-    print(url)
+    print('#EXTINF:-1 tvg-name="ATV",AVRUPA')
+    print(best_url)
 
 
 if __name__ == "__main__":

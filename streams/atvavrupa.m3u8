@@ -1,13 +1,7 @@
 #EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:10
-#EXT-X-MEDIA-SEQUENCE:553227
-#EXTINF:10.000,
-https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553227.ts
-#EXTINF:10.000,
-https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553228.ts
-#EXTINF:10.000,
-https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553229.ts
+#EXT-X-MEDIA-SEQUENCE:553230
 #EXTINF:10.000,
 https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553230.ts
 #EXTINF:10.000,
@@ -602,3 +596,9 @@ https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_5535
 https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553525.ts
 #EXTINF:10.000,
 https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553526.ts
+#EXTINF:10.000,
+https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553527.ts
+#EXTINF:10.000,
+https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553528.ts
+#EXTINF:10.000,
+https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/seg_553529.ts

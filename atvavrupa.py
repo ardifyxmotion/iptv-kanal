@@ -9,7 +9,7 @@ M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
 SEQUENCE_FILE = os.path.join(STREAM_DIR, "sequence.txt")
 MAX_SEGMENTS = 160
 
-BASE_URL = "https://github.com/ardifyxmotion/iptv-kanal/tree/main/kanal"
+BASE_URL = "https://github.com/ardifyxmotion/iptv-kanal/tree/main/streams"
 
 def download_segment(args):
     fname, url = args

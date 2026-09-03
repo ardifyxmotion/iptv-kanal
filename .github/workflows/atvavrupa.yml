@@ -2,46 +2,55 @@ name: atvavrupa update
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: atvavrupa-stream
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository'yi indir
+      - name: Repository'i indir
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Python kurulumu
+      - name: Python kur
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Gerekli paketleri yükle
+      - name: Gerekli paketleri kur
         run: |
           python -m pip install --upgrade pip
-          pip install streamlink requests
+          pip install requests streamlink
+
+      - name: Streams klasörünü oluştur
+        run: |
+          mkdir -p streams
 
       - name: ATV Avrupa yayınını güncelle
-        run: python3 atvavrupa.py
+        run: |
+          python atvavrupa.py
 
-      - name: Değişiklikleri GitHub'a kaydet
+      - name: Değişiklikleri kontrol et ve kaydet
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A streams/
+          git add streams/
 
           if git diff --cached --quiet; then
-            echo "Değişiklik yok."
+            echo "Değişiklik bulunamadı."
           else
-            git commit -m "atvavrupa updated"
+            git commit -m "atvavrupa stream updated"
             git pull --rebase origin main
             git push origin main
           fi

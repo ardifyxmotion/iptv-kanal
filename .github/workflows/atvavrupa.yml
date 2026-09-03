@@ -2,7 +2,7 @@ name: atvavrupa live update
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "* * * * *"
   workflow_dispatch:
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
 
               for retry in 1 2 3; do
                 if git push origin HEAD:main; then
-                  echo "Değişiklik anında GitHub'a gönderildi."
+                  echo "Değişiklik GitHub'a gönderildi."
                   break
                 fi
 

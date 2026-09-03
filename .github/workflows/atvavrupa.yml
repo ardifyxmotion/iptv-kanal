@@ -1,20 +1,21 @@
-name: atvavrupa update
+name: atvavrupa live update
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: atvavrupa-update
+  group: atvavrupa-live
   cancel-in-progress: false
 
 jobs:
-  sync:
+  live:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: Repository'yi indir
@@ -32,24 +33,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests streamlink
 
-      - name: Python dosyasını çalıştır
+      - name: Yayını sürekli takip et
         run: |
-          python atvavrupa.py
+          for i in $(seq 1 28); do
+            echo "=============================="
+            echo "Kontrol: $(date -u)"
+            echo "=============================="
 
-      - name: Streams klasörünü Git'e ekle
-        run: |
-          git add streams/
+            python atvavrupa.py || true
 
-      - name: Değişiklikleri kontrol et ve gönder
-        run: |
-          if git diff --cached --quiet; then
-            echo "Değişiklik bulunamadı."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add streams/
 
-            git commit -m "atvavrupa updated"
+            if git diff --cached --quiet; then
+              echo "Yeni değişiklik yok."
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            git pull --rebase origin main
-            git push origin HEAD:main
-          fi
+              git commit -m "atvavrupa live update"
+
+              for retry in 1 2 3; do
+                if git push origin HEAD:main; then
+                  echo "Değişiklik anında GitHub'a gönderildi."
+                  break
+                fi
+
+                echo "Push başarısız, tekrar deneniyor..."
+                git pull --rebase origin main || true
+                sleep 5
+              done
+            fi
+
+            echo "10 saniye bekleniyor..."
+            sleep 10
+          done

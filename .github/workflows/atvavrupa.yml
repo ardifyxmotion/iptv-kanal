@@ -2,12 +2,14 @@ name: atvavrupa stable live update
 
 on:
   schedule:
-    - cron: "* * * * *"
+    - cron: "5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Aynı anda sadece TEK workflow çalışsın.
+# Yeni tetiklemeler mevcut işlemi iptal etmesin.
 concurrency:
   group: atvavrupa-stable-live
   cancel-in-progress: false
@@ -36,32 +38,53 @@ jobs:
       - name: Yayını stabil takip et
         run: |
           for i in $(seq 1 100); do
+            echo "=============================="
             echo "Kontrol: $(date -u)"
+            echo "=============================="
 
-            python atvavrupa.py
+            python atvavrupa.py || true
 
+            # Değişiklik yoksa Git işlemi yapma
+            if git diff --quiet -- streams/; then
+              echo "Yeni değişiklik yok."
+              sleep 30
+              continue
+            fi
+
+            # Önce çalışma ağacındaki değişiklikleri sakla
             git add streams/
 
-            if git diff --cached --quiet; then
-              echo "Yeni değişiklik yok."
-            else
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            # Commit oluştur
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-              git commit -m "atvavrupa live update"
+            git commit -m "atvavrupa live update"
 
-              if ! git pull --rebase origin main; then
-                echo "Pull/rebase başarısız."
-                exit 1
+            # Uzak depoda yeni commit varsa rebase çatışması
+            # oluşturmadan bu workflow'u yeniden başlat.
+            if ! git push origin HEAD:main; then
+              echo "Push çakışması oluştu."
+
+              # Yerel değişiklik zaten commit edildiği için
+              # uzak depodaki son sürümü alıp commit'i tekrar uygula.
+              git fetch origin main
+
+              if git rebase origin/main; then
+                git push origin HEAD:main
+              else
+                echo "Çakışma oluştu. Rebase iptal ediliyor."
+                git rebase --abort || true
+
+                # Uzak depodaki son sürüme dön.
+                # Bir sonraki 30 saniyelik kontrolde yayın yeniden oluşturulur.
+                git reset --hard origin/main
+
+                sleep 30
+                continue
               fi
-
-              if ! git push origin HEAD:main; then
-                echo "Push başarısız."
-                exit 1
-              fi
-
-              echo "Güncelleme gönderildi."
             fi
+
+            echo "Güncelleme gönderildi."
 
             sleep 30
           done

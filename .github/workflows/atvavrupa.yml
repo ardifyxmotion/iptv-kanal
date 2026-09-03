@@ -1,4 +1,4 @@
-name: atvavrupa live update
+name: atvavrupa stable live update
 
 on:
   schedule:
@@ -9,13 +9,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: atvavrupa-live
-  cancel-in-progress: false
+  group: atvavrupa-stable-live
+  cancel-in-progress: true
 
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 55
 
     steps:
       - name: Repository'yi indir
@@ -33,14 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests streamlink
 
-      - name: Yayını sürekli takip et
+      - name: Yayını stabil takip et
         run: |
-          for i in $(seq 1 28); do
-            echo "=============================="
+          for i in $(seq 1 100); do
             echo "Kontrol: $(date -u)"
-            echo "=============================="
 
-            python atvavrupa.py || true
+            python atvavrupa.py
 
             git add streams/
 
@@ -52,18 +50,19 @@ jobs:
 
               git commit -m "atvavrupa live update"
 
-              for retry in 1 2 3; do
-                if git push origin HEAD:main; then
-                  echo "Değişiklik GitHub'a gönderildi."
-                  break
-                fi
+              if ! git pull --rebase origin main; then
+                echo "Pull/rebase başarısız."
+                exit 1
+              fi
 
-                echo "Push başarısız, tekrar deneniyor..."
-                git pull --rebase origin main || true
-                sleep 5
-              done
+              if ! git push origin HEAD:main; then
+                echo "Push başarısız."
+                exit 1
+              fi
+
+              echo "Güncelleme gönderildi."
             fi
 
-            echo "10 saniye bekleniyor..."
-            sleep 10
+            # Çok sık güncelleme yerine stabil bir aralık.
+            sleep 30
           done

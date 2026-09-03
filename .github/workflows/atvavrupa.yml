@@ -1,15 +1,13 @@
-name: atvavrupa update
+name: atvavrupa 24 saat DVR
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  sync:
+  dvr:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,21 +20,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-          cache: "pip"
 
       - name: FFmpeg kurulumu
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Gerekli paketleri kur
+      - name: Streams klasörünü oluştur
         run: |
-          pip install -q streamlink requests
+          mkdir -p streams
+          touch streams/.gitkeep
 
-      - name: ATV Avrupa yayını güncelle
-        run: python3 atvavrupa.py
+      - name: DVR'yi başlat
+        run: python3 dvr.py
 
-      - name: Değişiklikleri GitHub'a gönder
+      - name: Değişiklikleri kaydet
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -44,8 +43,8 @@ jobs:
           git add streams/
 
           if git diff --cached --quiet; then
-            echo "Değişiklik yok."
+            echo "Kaydedilecek değişiklik yok."
           else
-            git commit -m "ATV Avrupa Sync $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git commit -m "DVR segmentleri güncellendi"
             git push
           fi

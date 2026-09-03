@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import hashlib
 import subprocess
 import requests
@@ -13,565 +14,302 @@ STATE_FILE = os.path.join(STREAM_DIR, "atvavrupa_state.json")
 BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# Çok fazla eski görüntünün tekrar listeye girmemesi için
-# oynatma listesinde sınırlı bir geçmiş tutulur.
 MAX_SEGMENTS = 300
+CHECK_INTERVAL = 10
 
 
 def get_stream_url():
-    try:
-        result = subprocess.run(
-            [
-                "streamlink",
-                "--stream-url",
-                "https://www.atvavrupa.tv/canli-yayin",
-                "best"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-
-        url = result.stdout.strip()
-
-        if not url:
-            print("Canlı yayın adresi bulunamadı.")
-            print(result.stderr)
-            return None
-
-        return url
-
-    except Exception as error:
-        print(f"Streamlink hatası: {error}")
+    result = subprocess.run(
+        ["streamlink", "--stream-url",
+         "https://www.atvavrupa.tv/canli-yayin", "best"],
+        capture_output=True, text=True, timeout=60
+    )
+    url = result.stdout.strip()
+    if not url:
+        print("Yayın URL'si bulunamadı.")
         return None
+    return url
 
 
-def get_source_playlist(stream_url):
-    try:
-        response = requests.get(
-            stream_url,
-            headers=HEADERS,
-            timeout=30
-        )
-        response.raise_for_status()
+def get_playlist(stream_url):
+    response = requests.get(
+        stream_url, headers=HEADERS, timeout=30
+    )
+    response.raise_for_status()
 
-        lines = [
-            line.strip()
-            for line in response.text.splitlines()
-            if line.strip()
-        ]
+    lines = [x.strip() for x in response.text.splitlines() if x.strip()]
+    target_duration = 10
+    segments = []
 
-        target_duration = 10
-        segments = []
+    for line in lines:
+        if line.startswith("#EXT-X-TARGETDURATION:"):
+            try:
+                target_duration = int(line.split(":", 1)[1])
+            except ValueError:
+                pass
 
-        for line in lines:
-            if line.startswith("#EXT-X-TARGETDURATION:"):
-                try:
-                    target_duration = int(
-                        line.split(":", 1)[1]
-                    )
-                except ValueError:
-                    pass
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("#EXTINF:"):
+            try:
+                duration = lines[i].split(":", 1)[1].split(",", 1)[0]
+            except Exception:
+                i += 1
+                continue
 
-        index = 0
+            j = i + 1
+            while j < len(lines):
+                if not lines[j].startswith("#"):
+                    url = urljoin(stream_url, lines[j])
+                    segments.append({
+                        "id": hashlib.sha1(
+                            url.split("?", 1)[0].encode()
+                        ).hexdigest(),
+                        "duration": duration,
+                        "url": url
+                    })
+                    i = j
+                    break
+                j += 1
+        i += 1
 
-        while index < len(lines):
-            if lines[index].startswith("#EXTINF:"):
-                try:
-                    duration = lines[index].split(
-                        ":", 1
-                    )[1].split(",", 1)[0]
-                except (IndexError, ValueError):
-                    index += 1
-                    continue
-
-                next_index = index + 1
-
-                while next_index < len(lines):
-                    next_line = lines[next_index]
-
-                    if not next_line.startswith("#"):
-                        segment_url = urljoin(
-                            stream_url,
-                            next_line
-                        )
-
-                        segments.append({
-                            "duration": duration,
-                            "url": segment_url
-                        })
-
-                        index = next_index
-                        break
-
-                    next_index += 1
-
-            index += 1
-
-        if not segments:
-            return None
-
-        return {
-            "target_duration": target_duration,
-            "segments": segments
-        }
-
-    except Exception as error:
-        print(f"Kaynak liste okunamadı: {error}")
-        return None
-
-
-def segment_id(url):
-    """
-    Geçici token ve benzeri değişiklikler URL'yi değiştirse bile
-    mümkün olduğunca aynı segmenti tekrar eklememek için URL'nin
-    yol kısmı temel alınır.
-    """
-
-    clean_url = url.split("?", 1)[0]
-
-    return hashlib.sha1(
-        clean_url.encode("utf-8")
-    ).hexdigest()
+    return target_duration, segments
 
 
 def load_state():
-    default_state = {
+    default = {
         "last_local_sequence": -1,
         "seen_segments": []
     }
 
     if not os.path.exists(STATE_FILE):
-        return default_state
+        return default
 
     try:
-        with open(
-            STATE_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-            state = json.load(f)
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-        if not isinstance(
-            state.get("seen_segments"),
-            list
-        ):
-            state["seen_segments"] = []
+        if not isinstance(data.get("seen_segments"), list):
+            data["seen_segments"] = []
 
-        if "last_local_sequence" not in state:
-            state["last_local_sequence"] = -1
+        if "last_local_sequence" not in data:
+            data["last_local_sequence"] = -1
 
-        return state
+        return data
 
-    except Exception as error:
-        print(f"State dosyası okunamadı: {error}")
-        return default_state
+    except Exception:
+        return default
 
 
 def save_state(state):
-    temp_file = STATE_FILE + ".tmp"
+    state["seen_segments"] = state["seen_segments"][-1500:]
 
-    # State dosyasının sınırsız büyümesini engelle.
-    # Son segment geçmişini sakla.
-    state["seen_segments"] = (
-        state["seen_segments"][-1000:]
-    )
+    temp = STATE_FILE + ".tmp"
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
 
-    with open(
-        temp_file,
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(
-            state,
-            f,
-            ensure_ascii=False
-        )
-
-    os.replace(temp_file, STATE_FILE)
+    os.replace(temp, STATE_FILE)
 
 
-def load_existing_entries():
+def load_entries():
     entries = []
 
     if not os.path.exists(PLAYLIST_FILE):
         return entries
 
     try:
-        with open(
-            PLAYLIST_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-            lines = [
-                line.strip()
-                for line in f
-                if line.strip()
-            ]
+        with open(PLAYLIST_FILE, "r", encoding="utf-8") as f:
+            lines = [x.strip() for x in f if x.strip()]
 
         duration = None
 
         for line in lines:
             if line.startswith("#EXTINF:"):
-                duration = line.split(
-                    ":", 1
-                )[1].split(",", 1)[0]
+                duration = line.split(":", 1)[1].split(",", 1)[0]
 
-            elif (
-                duration is not None
-                and not line.startswith("#")
-            ):
-                filename = line.rsplit(
-                    "/",
-                    1
-                )[-1]
+            elif duration and not line.startswith("#"):
+                filename = line.rsplit("/", 1)[-1]
 
-                if (
-                    filename.startswith("seg_")
-                    and filename.endswith(".ts")
-                ):
+                if filename.startswith("seg_") and filename.endswith(".ts"):
                     try:
-                        sequence = int(
-                            filename[4:-3]
-                        )
-
-                        filepath = os.path.join(
-                            STREAM_DIR,
-                            filename
-                        )
-
-                        if os.path.exists(filepath):
+                        seq = int(filename[4:-3])
+                        if os.path.exists(
+                            os.path.join(STREAM_DIR, filename)
+                        ):
                             entries.append({
-                                "sequence": sequence,
+                                "sequence": seq,
                                 "duration": duration,
                                 "filename": filename
                             })
-
                     except ValueError:
                         pass
 
                 duration = None
 
     except Exception as error:
-        print(
-            f"Mevcut liste okunamadı: {error}"
-        )
+        print(f"Eski liste okunamadı: {error}")
 
-    return sorted(
-        entries,
-        key=lambda item: item["sequence"]
-    )
+    return sorted(entries, key=lambda x: x["sequence"])
 
 
-def download_segment(item):
+def download(item):
     filename, url = item
-    filepath = os.path.join(
-        STREAM_DIR,
-        filename
-    )
+    path = os.path.join(STREAM_DIR, filename)
 
-    if os.path.exists(filepath):
+    if os.path.exists(path):
         return filename
 
-    temp_path = filepath + ".tmp"
+    temp = path + ".tmp"
 
     try:
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=45
-        )
-
+        response = requests.get(url, headers=HEADERS, timeout=45)
         response.raise_for_status()
 
-        with open(
-            temp_path,
-            "wb"
-        ) as f:
+        with open(temp, "wb") as f:
             f.write(response.content)
 
-        os.replace(
-            temp_path,
-            filepath
-        )
-
+        os.replace(temp, path)
         return filename
 
     except Exception as error:
+        print(f"İndirme hatası: {filename} -> {error}")
         try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            os.remove(temp)
         except OSError:
             pass
-
-        print(
-            f"Segment indirilemedi: "
-            f"{filename} -> {error}"
-        )
-
         return None
 
 
 def write_playlist(entries, target_duration):
     if not entries:
-        return False
+        return
 
-    temp_file = PLAYLIST_FILE + ".tmp"
+    temp = PLAYLIST_FILE + ".tmp"
 
-    with open(
-        temp_file,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
+    with open(temp, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n")
         f.write("#EXT-X-VERSION:3\n")
-
-        f.write(
-            f"#EXT-X-TARGETDURATION:"
-            f"{target_duration}\n"
-        )
-
-        f.write(
-            f"#EXT-X-MEDIA-SEQUENCE:"
-            f"{entries[0]['sequence']}\n"
-        )
+        f.write(f"#EXT-X-TARGETDURATION:{target_duration}\n")
+        f.write(f"#EXT-X-MEDIA-SEQUENCE:{entries[0]['sequence']}\n")
 
         for entry in entries:
-            f.write(
-                f"#EXTINF:"
-                f"{entry['duration']},\n"
-            )
+            f.write(f"#EXTINF:{entry['duration']},\n")
+            f.write(f"{BASE_URL}{entry['filename']}\n")
 
-            f.write(
-                f"{BASE_URL}"
-                f"{entry['filename']}\n"
-            )
-
-    os.replace(
-        temp_file,
-        PLAYLIST_FILE
-    )
-
-    return True
+    os.replace(temp, PLAYLIST_FILE)
 
 
-def clean_old_files(entries):
-    current_files = {
-        entry["filename"]
-        for entry in entries
-    }
+def clean_files(entries):
+    keep = {x["filename"] for x in entries}
 
     for filename in os.listdir(STREAM_DIR):
-
         if (
             filename.startswith("seg_")
             and filename.endswith(".ts")
-            and filename not in current_files
+            and filename not in keep
         ):
             try:
-                os.remove(
-                    os.path.join(
-                        STREAM_DIR,
-                        filename
-                    )
-                )
+                os.remove(os.path.join(STREAM_DIR, filename))
             except OSError:
                 pass
 
 
-def main():
-    os.makedirs(
-        STREAM_DIR,
-        exist_ok=True
-    )
-
+def update_once():
     stream_url = get_stream_url()
-
     if not stream_url:
-        return
+        return False
 
-    playlist = get_source_playlist(
-        stream_url
-    )
-
-    if not playlist:
-        print(
-            "Kaynak listede segment bulunamadı."
-        )
-        return
+    target_duration, source_segments = get_playlist(stream_url)
 
     state = load_state()
+    entries = load_entries()
+    seen = set(state["seen_segments"])
 
-    existing_entries = (
-        load_existing_entries()
-    )
+    last_local = state["last_local_sequence"]
+    if entries:
+        last_local = max(last_local, entries[-1]["sequence"])
 
-    last_local = state[
-        "last_local_sequence"
+    new_segments = [
+        segment for segment in source_segments
+        if segment["id"] not in seen
     ]
 
-    if existing_entries:
-        last_local = max(
-            last_local,
-            existing_entries[-1]["sequence"]
-        )
+    if not new_segments:
+        print("Yeni segment yok.")
+        return False
 
-    # Daha önce görülen segmentlerin kümesi
-    seen = set(
-        state["seen_segments"]
-    )
+    pending = []
+    downloads = []
 
-    new_source_segments = []
-
-    for segment in playlist["segments"]:
-
-        unique_id = segment_id(
-            segment["url"]
-        )
-
-        if unique_id not in seen:
-
-            new_source_segments.append({
-                "id": unique_id,
-                "duration": (
-                    segment["duration"]
-                ),
-                "url": segment["url"]
-            })
-
-    if not new_source_segments:
-
-        print(
-            "Gerçekten yeni segment bulunamadı. "
-            "Aynı sahneler tekrar eklenmiyor."
-        )
-
-        return
-
-    print(
-        f"{len(new_source_segments)} "
-        f"yeni segment bulundu."
-    )
-
-    pending_entries = []
-    download_list = []
-
-    for segment in new_source_segments:
-
+    for segment in new_segments:
         last_local += 1
+        filename = f"seg_{last_local}.ts"
 
-        filename = (
-            f"seg_{last_local}.ts"
-        )
-
-        pending_entries.append({
+        pending.append({
             "sequence": last_local,
             "id": segment["id"],
             "duration": segment["duration"],
             "filename": filename
         })
 
-        download_list.append((
-            filename,
-            segment["url"]
-        ))
+        downloads.append((filename, segment["url"]))
 
-    with ThreadPoolExecutor(
-        max_workers=6
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(download, downloads))
 
-        results = list(
-            executor.map(
-                download_segment,
-                download_list
-            )
-        )
+    successful = {x for x in results if x}
 
-    successful = {
-        filename
-        for filename in results
-        if filename is not None
-    }
-
-    successful_new_entries = [
-        entry
-        for entry in pending_entries
-        if entry["filename"] in successful
+    new_entries = [
+        x for x in pending
+        if x["filename"] in successful
     ]
 
-    if not successful_new_entries:
+    if not new_entries:
+        return False
 
-        print(
-            "Yeni segmentler indirilemedi. "
-            "Mevcut liste korunuyor."
-        )
-
-        return
-
-    # Yalnızca başarıyla indirilen segmentleri
-    # 'görüldü' listesine ekle.
-    for entry in successful_new_entries:
+    for entry in new_entries:
         seen.add(entry["id"])
 
     state["seen_segments"] = list(seen)
-
-    # Yerel sıra numarasını başarıyla indirilen
-    # son dosyaya göre güncelle.
     state["last_local_sequence"] = max(
-        entry["sequence"]
-        for entry in successful_new_entries
+        x["sequence"] for x in new_entries
     )
 
-    all_entries = (
-        existing_entries +
-        [
-            {
-                "sequence": entry["sequence"],
-                "duration": entry["duration"],
-                "filename": entry["filename"]
-            }
-            for entry in successful_new_entries
-        ]
-    )
+    entries.extend([
+        {
+            "sequence": x["sequence"],
+            "duration": x["duration"],
+            "filename": x["filename"]
+        }
+        for x in new_entries
+    ])
 
-    # Aynı dosya numarasını iki kez yazma
-    unique_entries = {}
+    entries = sorted(entries, key=lambda x: x["sequence"])[-MAX_SEGMENTS:]
 
-    for entry in all_entries:
-        unique_entries[
-            entry["sequence"]
-        ] = entry
-
-    all_entries = sorted(
-        unique_entries.values(),
-        key=lambda item: item["sequence"]
-    )
-
-    # Oynatma listesini sınırlı tut
-    if len(all_entries) > MAX_SEGMENTS:
-        all_entries = all_entries[
-            -MAX_SEGMENTS:
-        ]
-
-    write_playlist(
-        all_entries,
-        playlist["target_duration"]
-    )
-
+    write_playlist(entries, target_duration)
     save_state(state)
-
-    clean_old_files(all_entries)
-
-    print(
-        f"{len(successful_new_entries)} "
-        f"yeni segment eklendi."
-    )
+    clean_files(entries)
 
     print(
-        f"Toplam segment: "
-        f"{len(all_entries)}"
+        f"{len(new_entries)} yeni segment eklendi. "
+        f"Toplam: {len(entries)}"
     )
+
+    return True
+
+
+def main():
+    os.makedirs(STREAM_DIR, exist_ok=True)
+
+    while True:
+        try:
+            print("Kontrol ediliyor...")
+            update_once()
+        except Exception as error:
+            print(f"Genel hata: {error}")
+
+        print(f"{CHECK_INTERVAL} saniye bekleniyor...")
+        time.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":

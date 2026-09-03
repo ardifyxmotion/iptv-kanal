@@ -1,0 +1,35 @@
+name: atvavrupa
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Kurulum
+        run: pip install -q streamlink requests
+
+      - name: Çalıştır
+        run: python3 atvavrupa.py
+
+      - name: Git Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A streams/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Sync $(date +'%H:%M')" && git push)

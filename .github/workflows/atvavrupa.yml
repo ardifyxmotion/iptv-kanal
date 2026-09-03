@@ -1,4 +1,4 @@
-name: atvavrupa update
+name: atvavrupa live tracker
 
 on:
   schedule:
@@ -9,19 +9,17 @@ permissions:
   contents: write
 
 concurrency:
-  group: atvavrupa-update
-  cancel-in-progress: false
+  group: atvavrupa-live-tracker
+  cancel-in-progress: true
 
 jobs:
-  update:
+  live:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 55
 
     steps:
       - name: Repository'yi indir
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -33,21 +31,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests streamlink
 
-      - name: Yayını bir kez güncelle
+      - name: Yayını anlık takip et
         run: |
-          python atvavrupa.py
+          python atvavrupa.py &
+          PYTHON_PID=$!
 
-      - name: Değişiklikleri GitHub'a gönder
-        run: |
-          git add streams/
+          while kill -0 $PYTHON_PID 2>/dev/null; do
+            sleep 30
 
-          if git diff --cached --quiet; then
-            echo "Yeni değişiklik yok."
-            exit 0
-          fi
+            git add streams/
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if git diff --cached --quiet; then
+              echo "Henüz GitHub'a gönderilecek değişiklik yok."
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "atvavrupa update"
-          git push origin HEAD:main
+              git commit -m "atvavrupa live update"
+
+              git push origin HEAD:main || echo "Push sonraki kontrolde tekrar denenecek."
+            fi
+          done

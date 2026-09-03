@@ -1,356 +1,207 @@
 import os
-import glob
+import json
+import time
 import subprocess
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 STREAM_DIR = "streams"
 M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
+INDEX_FILE = os.path.join(STREAM_DIR, "segments.json")
 
-# GitHub üzerindeki ham (raw) segment adresi
 BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
+TIMEZONE = ZoneInfo("Europe/Istanbul")
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# M3U8 içinde tutulabilecek maksimum segment sayısı
-MAX_SEGMENTS = 500
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+def load_archive():
+    try:
+        with open(INDEX_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_archive(archive):
+    with open(INDEX_FILE, "w", encoding="utf-8") as f:
+        json.dump(archive, f, ensure_ascii=False)
 
 
 def get_stream_url():
-    """Streamlink ile gerçek canlı yayın M3U8 adresini bulur."""
-
-    try:
-        result = subprocess.run(
-            [
-                "streamlink",
-                "--stream-url",
-                "https://www.atvavrupa.tv/canli-yayin",
-                "best"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-
-        stream_url = result.stdout.strip()
-
-        if not stream_url:
-            print("Yayın URL'si bulunamadı.")
-            print(result.stderr)
-            return None
-
-        return stream_url
-
-    except Exception as error:
-        print(f"Streamlink hatası: {error}")
-        return None
-
-
-def get_playlist(stream_url):
-    """
-    Kaynak M3U8 dosyasını okur.
-
-    - Gerçek MEDIA-SEQUENCE değerini alır.
-    - Gerçek TARGETDURATION değerini alır.
-    - Her segmentin gerçek EXTINF süresini korur.
-    """
-
-    response = requests.get(
-        stream_url,
-        headers=HEADERS,
-        timeout=20
+    result = subprocess.run(
+        ["streamlink", "--stream-url",
+         "https://www.atvavrupa.tv/canli-yayin", "best"],
+        capture_output=True, text=True, timeout=30
     )
+    url = result.stdout.strip()
+    if not url:
+        print("Yayın URL'si bulunamadı.")
+        print(result.stderr)
+        return None
+    return url
 
+
+def get_source_segments(stream_url):
+    response = requests.get(stream_url, headers=HEADERS, timeout=30)
     response.raise_for_status()
 
-    lines = [
-        line.strip()
-        for line in response.text.splitlines()
-        if line.strip()
-    ]
-
+    lines = [x.strip() for x in response.text.splitlines() if x.strip()]
     media_sequence = 0
     target_duration = 10
-    segments = []
 
     for line in lines:
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
-            try:
-                media_sequence = int(
-                    line.split(":", 1)[1]
-                )
-            except ValueError:
-                pass
-
+            media_sequence = int(line.split(":", 1)[1])
         elif line.startswith("#EXT-X-TARGETDURATION:"):
+            target_duration = int(line.split(":", 1)[1])
+
+    segments = []
+    i = 0
+
+    while i < len(lines):
+        if lines[i].startswith("#EXTINF:"):
             try:
-                target_duration = int(
-                    line.split(":", 1)[1]
-                )
+                duration = float(lines[i].split(":", 1)[1].split(",", 1)[0])
             except ValueError:
-                pass
-
-    # EXTINF ve hemen ardından gelen segment URL'lerini eşleştir
-    index = 0
-
-    while index < len(lines):
-        line = lines[index]
-
-        if line.startswith("#EXTINF:"):
-            try:
-                duration = line.split(
-                    ":", 1
-                )[1].split(",", 1)[0]
-            except IndexError:
-                index += 1
+                i += 1
                 continue
 
-            next_index = index + 1
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("#"):
+                j += 1
 
-            # EXTINF sonrasındaki segment URL'sini bul
-            while next_index < len(lines):
-                next_line = lines[next_index]
+            if j < len(lines):
+                segments.append({
+                    "duration": duration,
+                    "url": urljoin(stream_url, lines[j]),
+                    "sequence": media_sequence + len(segments)
+                })
+                i = j
+        i += 1
 
-                if not next_line.startswith("#"):
-                    segment_url = urljoin(
-                        stream_url,
-                        next_line
-                    )
+    return target_duration, segments
 
-                    segments.append(
-                        {
-                            "duration": duration,
-                            "url": segment_url
-                        }
-                    )
 
-                    index = next_index
-                    break
+def download_segment(segment):
+    filename = f"seg_{segment['sequence']}.ts"
+    path = os.path.join(STREAM_DIR, filename)
 
-                next_index += 1
+    if not os.path.exists(path):
+        try:
+            response = requests.get(
+                segment["url"], headers=HEADERS, timeout=30
+            )
+            response.raise_for_status()
 
-        index += 1
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(response.content)
+            os.replace(tmp, path)
 
-    if not segments:
-        return None
-
-    # Kaynakta 500'den fazla segment varsa sadece son 500'ü tut.
-    # MEDIA-SEQUENCE kesilen segment sayısı kadar artırılır.
-    if len(segments) > MAX_SEGMENTS:
-        removed_segments = len(segments) - MAX_SEGMENTS
-
-        segments = segments[-MAX_SEGMENTS:]
-
-        media_sequence += removed_segments
+        except Exception as error:
+            print(f"İndirilemedi {filename}: {error}")
+            return None
 
     return {
-        "media_sequence": media_sequence,
-        "target_duration": target_duration,
-        "segments": segments
+        "filename": filename,
+        "sequence": segment["sequence"],
+        "duration": segment["duration"],
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     }
 
 
-def download_segment(item):
-    """Tek bir segmenti indirir."""
+def clean_previous_day(archive, today):
+    """Yeni gün başladığında önceki günün segmentlerini sil."""
+    kept = []
 
-    filename, url = item
-    filepath = os.path.join(STREAM_DIR, filename)
-
-    try:
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        # Geçici dosyaya yazıp başarılı olursa değiştir.
-        temp_path = filepath + ".tmp"
-
-        with open(temp_path, "wb") as f:
-            f.write(response.content)
-
-        os.replace(temp_path, filepath)
-
-        return filename
-
-    except Exception as error:
-        print(
-            f"Segment indirilemedi: "
-            f"{filename} -> {error}"
-        )
-
-        return None
-
-
-def clean_old_segments(current_files):
-    """Mevcut M3U8 listesinde olmayan eski segmentleri siler."""
-
-    existing_files = glob.glob(
-        os.path.join(STREAM_DIR, "seg_*")
-    )
-
-    for filepath in existing_files:
-        filename = os.path.basename(filepath)
-
-        if filename.endswith(".ts") and filename not in current_files:
+    for item in archive:
+        if item.get("date") == today:
+            kept.append(item)
+        else:
+            path = os.path.join(STREAM_DIR, item["filename"])
             try:
-                os.remove(filepath)
+                if os.path.exists(path):
+                    os.remove(path)
             except OSError:
                 pass
+
+    return kept
+
+
+def write_playlist(archive, target_duration):
+    if not archive:
+        return
+
+    archive.sort(key=lambda x: x["sequence"])
+
+    with open(M3U8_FILENAME, "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n")
+        f.write("#EXT-X-VERSION:3\n")
+        f.write(f"#EXT-X-TARGETDURATION:{target_duration}\n")
+        f.write(f"#EXT-X-MEDIA-SEQUENCE:{archive[0]['sequence']}\n")
+
+        for item in archive:
+            f.write(f"#EXTINF:{item['duration']:.3f},\n")
+            f.write(f"{BASE_URL}{item['filename']}\n")
 
 
 def main():
     os.makedirs(STREAM_DIR, exist_ok=True)
 
-    try:
-        # 1. Gerçek canlı yayın adresini bul
-        stream_url = get_stream_url()
+    now = datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
 
-        if not stream_url:
-            return
+    print(f"Tarih: {today}")
+    print(f"Günün yayın konumu: {now.strftime('%H:%M:%S')}")
 
-        print(f"Canlı yayın bulundu:\n{stream_url}")
+    archive = clean_previous_day(load_archive(), today)
 
-        # 2. Kaynak M3U8 bilgilerini al
-        playlist = get_playlist(stream_url)
+    # Aynı kaynak sequence değerini tekrar ekleme
+    known_sequences = {x["sequence"] for x in archive}
 
-        if not playlist:
-            print("M3U8 içerisinde segment bulunamadı.")
-            return
+    stream_url = get_stream_url()
+    if not stream_url:
+        return
 
-        media_sequence = playlist["media_sequence"]
-        target_duration = playlist["target_duration"]
-        segments = playlist["segments"]
+    target_duration, source_segments = get_source_segments(stream_url)
 
-        print(
-            f"Segment sayısı: {len(segments)} | "
-            f"MEDIA-SEQUENCE: {media_sequence}"
-        )
+    new_segments = [
+        segment for segment in source_segments
+        if segment["sequence"] not in known_sequences
+    ]
 
-        # 3. Gerçek MEDIA-SEQUENCE değerine göre dosya adlarını oluştur
-        files_to_download = []
+    print(f"Kaynak segment: {len(source_segments)}")
+    print(f"Yeni segment: {len(new_segments)}")
 
-        for index, segment in enumerate(segments):
-            sequence_number = media_sequence + index
+    if new_segments:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(download_segment, new_segments))
 
-            filename = (
-                f"seg_{sequence_number}.ts"
-            )
+        archive.extend(x for x in results if x is not None)
 
-            files_to_download.append(
-                (
-                    filename,
-                    segment["url"]
-                )
-            )
+    # Sequence değerine göre sırala ve dosyası olmayan kayıtları çıkar
+    archive = [
+        x for x in archive
+        if os.path.exists(os.path.join(STREAM_DIR, x["filename"]))
+    ]
 
-        # 4. Segmentleri paralel indir
-        with ThreadPoolExecutor(
-            max_workers=10
-        ) as executor:
+    archive.sort(key=lambda x: x["sequence"])
 
-            download_results = list(
-                executor.map(
-                    download_segment,
-                    files_to_download
-                )
-            )
+    save_archive(archive)
+    write_playlist(archive, target_duration)
 
-        successful_files = {
-            filename
-            for filename in download_results
-            if filename is not None
-        }
+    total_duration = sum(x["duration"] for x in archive)
 
-        if not successful_files:
-            print("Hiçbir segment indirilemedi.")
-            return
-
-        # 5. M3U8'e yalnızca başarıyla indirilen segmentleri ekle
-        playlist_entries = []
-
-        for index, segment in enumerate(segments):
-            sequence_number = media_sequence + index
-
-            filename = (
-                f"seg_{sequence_number}.ts"
-            )
-
-            if filename in successful_files:
-                playlist_entries.append(
-                    {
-                        "sequence": sequence_number,
-                        "duration": segment["duration"],
-                        "filename": filename
-                    }
-                )
-
-        if not playlist_entries:
-            print("M3U8 için geçerli segment yok.")
-            return
-
-        # İlk başarılı segmentin gerçek sıra numarası
-        first_sequence = (
-            playlist_entries[0]["sequence"]
-        )
-
-        # 6. Yeni M3U8 dosyasını oluştur
-        with open(
-            M3U8_FILENAME,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            f.write("#EXTM3U\n")
-            f.write("#EXT-X-VERSION:3\n")
-
-            f.write(
-                f"#EXT-X-TARGETDURATION:"
-                f"{target_duration}\n"
-            )
-
-            f.write(
-                f"#EXT-X-MEDIA-SEQUENCE:"
-                f"{first_sequence}\n"
-            )
-
-            # Gerçek EXTINF sürelerini yaz
-            for entry in playlist_entries:
-                f.write(
-                    f"#EXTINF:"
-                    f"{entry['duration']},\n"
-                )
-
-                f.write(
-                    f"{BASE_URL}"
-                    f"{entry['filename']}\n"
-                )
-
-        # 7. Eski segmentleri temizle
-        current_files = {
-            entry["filename"]
-            for entry in playlist_entries
-        }
-
-        clean_old_segments(current_files)
-
-        print(
-            f"Başarılı: "
-            f"{len(playlist_entries)} segment yazıldı."
-        )
-
-        print(
-            f"MEDIA-SEQUENCE: "
-            f"{first_sequence}"
-        )
-
-    except Exception as error:
-        print(f"Genel hata: {error}")
+    print(f"Arşiv segmenti: {len(archive)}")
+    print(
+        f"Biriken gerçek süre: "
+        f"{int(total_duration // 3600):02d}:"
+        f"{int((total_duration % 3600) // 60):02d}:"
+        f"{int(total_duration % 60):02d}"
+    )
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: atvavrupa-stable-live
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   live:
@@ -63,6 +63,5 @@ jobs:
               echo "Güncelleme gönderildi."
             fi
 
-            # Çok sık güncelleme yerine stabil bir aralık.
             sleep 30
           done

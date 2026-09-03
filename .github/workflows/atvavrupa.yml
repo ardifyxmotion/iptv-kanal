@@ -31,8 +31,20 @@ jobs:
           mkdir -p streams
           touch streams/.gitkeep
 
-      - name: DVR'yi başlat
-        run: python3 dvr.py
+      - name: Python dosyasını kontrol et ve çalıştır
+        run: |
+          if [ -f "24_saatlik_hls_dvr.py" ]; then
+            python3 24_saatlik_hls_dvr.py
+          elif [ -f "dvr.py" ]; then
+            python3 dvr.py
+          elif [ -f "atvavrupa.py" ]; then
+            python3 atvavrupa.py
+          else
+            echo "Python dosyası bulunamadı!"
+            echo "Repository içeriği:"
+            find . -maxdepth 2 -type f | sort
+            exit 1
+          fi
 
       - name: Değişiklikleri kaydet
         if: always()

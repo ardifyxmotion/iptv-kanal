@@ -12,7 +12,7 @@ M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
 BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 
 # M3U8 içinde tutulabilecek maksimum segment sayısı
-MAX_SEGMENTS = 500
+MAX_SEGMENTS = 5000
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"

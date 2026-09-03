@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import subprocess
 import requests
@@ -7,11 +8,12 @@ from urllib.parse import urljoin
 
 STREAM_DIR = "streams"
 M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
+STATE_FILENAME = os.path.join(STREAM_DIR, "atvavrupa_state.txt")
 
 BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 
-# M3U8 içinde tutulacak maksimum segment sayısı
-MAX_SEGMENTS = 500
+# Yaklaşık 1 saatten fazla geçmiş için artırılabilir.
+MAX_SEGMENTS = 1000
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -31,7 +33,7 @@ def get_stream_url():
             ],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=60
         )
 
         stream_url = result.stdout.strip()
@@ -49,12 +51,12 @@ def get_stream_url():
 
 
 def get_playlist(stream_url):
-    """Kaynak canlı M3U8 dosyasını okur."""
+    """Kaynak M3U8 listesini ve segment bilgilerini alır."""
 
     response = requests.get(
         stream_url,
         headers=HEADERS,
-        timeout=20
+        timeout=30
     )
 
     response.raise_for_status()
@@ -65,23 +67,23 @@ def get_playlist(stream_url):
         if line.strip()
     ]
 
-    media_sequence = 0
     target_duration = 10
+    media_sequence = 0
     segments = []
 
     for line in lines:
 
-        if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
+        if line.startswith("#EXT-X-TARGETDURATION:"):
             try:
-                media_sequence = int(
+                target_duration = int(
                     line.split(":", 1)[1]
                 )
             except ValueError:
                 pass
 
-        elif line.startswith("#EXT-X-TARGETDURATION:"):
+        elif line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
             try:
-                target_duration = int(
+                media_sequence = int(
                     line.split(":", 1)[1]
                 )
             except ValueError:
@@ -91,15 +93,14 @@ def get_playlist(stream_url):
 
     while index < len(lines):
 
-        line = lines[index]
-
-        if line.startswith("#EXTINF:"):
+        if lines[index].startswith("#EXTINF:"):
 
             try:
-                duration = line.split(
-                    ":", 1
-                )[1].split(",", 1)[0]
-
+                duration = (
+                    lines[index]
+                    .split(":", 1)[1]
+                    .split(",", 1)[0]
+                )
             except (IndexError, ValueError):
                 index += 1
                 continue
@@ -117,10 +118,16 @@ def get_playlist(stream_url):
                         next_line
                     )
 
+                    source_sequence = (
+                        media_sequence +
+                        len(segments)
+                    )
+
                     segments.append(
                         {
                             "duration": duration,
-                            "url": segment_url
+                            "url": segment_url,
+                            "source_sequence": source_sequence
                         }
                     )
 
@@ -135,17 +142,19 @@ def get_playlist(stream_url):
         return None
 
     return {
-        "media_sequence": media_sequence,
         "target_duration": target_duration,
         "segments": segments
     }
 
 
 def read_old_playlist():
-    """Eski M3U8 dosyasındaki segment geçmişini okur."""
+    """Mevcut M3U8 geçmişini okur."""
 
     if not os.path.exists(M3U8_FILENAME):
         return []
+
+    entries = []
+    current_duration = None
 
     try:
 
@@ -155,42 +164,40 @@ def read_old_playlist():
             encoding="utf-8"
         ) as f:
 
-            lines = [
-                line.strip()
-                for line in f.readlines()
-                if line.strip()
-            ]
+            for raw_line in f:
 
-        old_segments = []
-        current_duration = None
+                line = raw_line.strip()
 
-        for line in lines:
+                if not line:
+                    continue
 
-            if line.startswith("#EXTINF:"):
-
-                try:
-                    current_duration = line.split(
-                        ":", 1
-                    )[1].split(",", 1)[0]
-
-                except (IndexError, ValueError):
-                    current_duration = "10"
-
-            elif (
-                not line.startswith("#")
-                and current_duration is not None
-            ):
-
-                filename = line.split("/")[-1]
-
-                if filename.startswith("seg_"):
+                if line.startswith("#EXTINF:"):
 
                     try:
+                        current_duration = (
+                            line
+                            .split(":", 1)[1]
+                            .split(",", 1)[0]
+                        )
+                    except (IndexError, ValueError):
+                        current_duration = None
+
+                elif (
+                    current_duration is not None
+                    and not line.startswith("#")
+                ):
+
+                    filename = line.split("/")[-1]
+
+                    match = re.match(
+                        r"seg_(\d+)\.ts$",
+                        filename
+                    )
+
+                    if match:
 
                         sequence = int(
-                            filename
-                            .replace("seg_", "")
-                            .replace(".ts", "")
+                            match.group(1)
                         )
 
                         filepath = os.path.join(
@@ -200,7 +207,7 @@ def read_old_playlist():
 
                         if os.path.exists(filepath):
 
-                            old_segments.append(
+                            entries.append(
                                 {
                                     "sequence": sequence,
                                     "duration": current_duration,
@@ -208,20 +215,130 @@ def read_old_playlist():
                                 }
                             )
 
-                    except ValueError:
-                        pass
-
-                current_duration = None
-
-        return old_segments
+                    current_duration = None
 
     except Exception as error:
 
         print(
-            f"Eski M3U8 okunamadı: {error}"
+            f"Eski liste okunamadı: {error}"
         )
 
         return []
+
+    return entries
+
+
+def read_state():
+    """
+    Son indirilen kaynak segmentlerini ve
+    kendi sürekli segment numaramızı okur.
+    """
+
+    state = {
+        "last_source_sequence": -1,
+        "last_local_sequence": 0
+    }
+
+    if not os.path.exists(STATE_FILENAME):
+        return state
+
+    try:
+
+        with open(
+            STATE_FILENAME,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            for line in f:
+
+                line = line.strip()
+
+                if "=" not in line:
+                    continue
+
+                key, value = line.split(
+                    "=",
+                    1
+                )
+
+                try:
+                    state[key] = int(value)
+                except ValueError:
+                    pass
+
+    except Exception as error:
+        print(f"State okunamadı: {error}")
+
+    return state
+
+
+def save_state(
+    last_source_sequence,
+    last_local_sequence
+):
+    """Son durum bilgilerini kaydeder."""
+
+    temp_state = (
+        STATE_FILENAME + ".tmp"
+    )
+
+    with open(
+        temp_state,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        f.write(
+            f"last_source_sequence="
+            f"{last_source_sequence}\n"
+        )
+
+        f.write(
+            f"last_local_sequence="
+            f"{last_local_sequence}\n"
+        )
+
+    os.replace(
+        temp_state,
+        STATE_FILENAME
+    )
+
+
+def get_highest_local_sequence(entries):
+    """Disk ve playlist içindeki en büyük yerel numarayı bulur."""
+
+    highest = 0
+
+    for entry in entries:
+        highest = max(
+            highest,
+            entry["sequence"]
+        )
+
+    for filepath in glob.glob(
+        os.path.join(
+            STREAM_DIR,
+            "seg_*.ts"
+        )
+    ):
+
+        filename = os.path.basename(
+            filepath
+        )
+
+        match = re.match(
+            r"seg_(\d+)\.ts$",
+            filename
+        )
+
+        if match:
+            highest = max(
+                highest,
+                int(match.group(1))
+            )
+
+    return highest
 
 
 def download_segment(item):
@@ -247,7 +364,12 @@ def download_segment(item):
 
         response.raise_for_status()
 
-        temp_path = filepath + ".tmp"
+        if not response.content:
+            return None
+
+        temp_path = (
+            filepath + ".tmp"
+        )
 
         with open(
             temp_path,
@@ -274,7 +396,7 @@ def download_segment(item):
 
 
 def clean_old_segments(current_files):
-    """500 segment sınırının dışında kalan dosyaları siler."""
+    """Artık playlist içinde olmayan segmentleri siler."""
 
     existing_files = glob.glob(
         os.path.join(
@@ -293,7 +415,6 @@ def clean_old_segments(current_files):
 
             try:
                 os.remove(filepath)
-
             except OSError:
                 pass
 
@@ -307,13 +428,33 @@ def main():
 
     try:
 
-        old_segments = read_old_playlist()
+        # 1. Mevcut geçmişi oku
+        old_entries = read_old_playlist()
 
         print(
-            f"Eski geçmiş segment sayısı: "
-            f"{len(old_segments)}"
+            f"Korunan eski segment: "
+            f"{len(old_entries)}"
         )
 
+        # 2. Son durumu oku
+        state = read_state()
+
+        last_source_sequence = state.get(
+            "last_source_sequence",
+            -1
+        )
+
+        last_local_sequence = max(
+            state.get(
+                "last_local_sequence",
+                0
+            ),
+            get_highest_local_sequence(
+                old_entries
+            )
+        )
+
+        # 3. Canlı yayın adresini bul
         stream_url = get_stream_url()
 
         if not stream_url:
@@ -324,49 +465,66 @@ def main():
             f"{stream_url}"
         )
 
+        # 4. Kaynak playlist'i al
         playlist = get_playlist(
             stream_url
         )
 
         if not playlist:
-
-            print(
-                "M3U8 içerisinde "
-                "segment bulunamadı."
-            )
-
+            print("Segment bulunamadı.")
             return
 
-        media_sequence = playlist[
-            "media_sequence"
+        source_segments = playlist[
+            "segments"
         ]
 
         target_duration = playlist[
             "target_duration"
         ]
 
-        segments = playlist[
-            "segments"
-        ]
-
         print(
-            f"Yeni kaynak segment sayısı: "
-            f"{len(segments)}"
+            f"Kaynak segment sayısı: "
+            f"{len(source_segments)}"
         )
 
-        files_to_download = []
-        new_segment_data = []
+        # 5. Daha önce işlenmemiş segmentleri bul
+        new_source_segments = [
 
-        for index, segment in enumerate(
-            segments
-        ):
+            segment
 
-            sequence_number = (
-                media_sequence + index
+            for segment in source_segments
+
+            if segment["source_sequence"]
+            > last_source_sequence
+
+        ]
+
+        # İlk çalıştırmada kaynakta görünen
+        # segmentlerin tamamını indir.
+        if last_source_sequence < 0:
+
+            new_source_segments = source_segments
+
+        if not new_source_segments:
+
+            print(
+                "Yeni segment bulunamadı. "
+                "Eski liste korunuyor."
             )
 
+            # Mevcut state'i ve playlist'i değiştirme.
+            return
+
+        # 6. Her yeni segmente kendi sürekli numaramızı ver
+        files_to_download = []
+        pending_entries = []
+
+        for segment in new_source_segments:
+
+            last_local_sequence += 1
+
             filename = (
-                f"seg_{sequence_number}.ts"
+                f"seg_{last_local_sequence}.ts"
             )
 
             files_to_download.append(
@@ -376,21 +534,25 @@ def main():
                 )
             )
 
-            new_segment_data.append(
+            pending_entries.append(
                 {
-                    "sequence": sequence_number,
+                    "sequence": last_local_sequence,
                     "duration": segment[
                         "duration"
                     ],
-                    "filename": filename
+                    "filename": filename,
+                    "source_sequence": segment[
+                        "source_sequence"
+                    ]
                 }
             )
 
+        # 7. Segmentleri paralel indir
         with ThreadPoolExecutor(
             max_workers=10
         ) as executor:
 
-            download_results = list(
+            results = list(
                 executor.map(
                     download_segment,
                     files_to_download
@@ -400,61 +562,69 @@ def main():
         successful_files = {
 
             filename
-            for filename in download_results
+            for filename in results
             if filename is not None
 
         }
 
-        successful_new_segments = [
+        successful_entries = [
 
-            segment
+            entry
 
-            for segment in new_segment_data
+            for entry in pending_entries
 
-            if segment["filename"]
+            if entry["filename"]
             in successful_files
 
         ]
 
-        segment_map = {}
+        if not successful_entries:
 
-        for segment in old_segments:
+            print(
+                "Yeni segmentler indirilemedi. "
+                "Eski playlist korunuyor."
+            )
 
-            segment_map[
-                segment["sequence"]
-            ] = segment
+            return
 
-        for segment in successful_new_segments:
+        # 8. Eski ve yeni segmentleri birleştir
+        playlist_entries = (
+            old_entries +
+            successful_entries
+        )
 
-            segment_map[
-                segment["sequence"]
-            ] = segment
-
+        # Yerel sıra numarasına göre sırala
         playlist_entries = sorted(
-            segment_map.values(),
+            playlist_entries,
             key=lambda x: x["sequence"]
         )
 
+        # Aynı yerel sıra numarasını tekrar etme
+        unique_entries = {}
+        for entry in playlist_entries:
+            unique_entries[
+                entry["sequence"]
+            ] = entry
+
+        playlist_entries = sorted(
+            unique_entries.values(),
+            key=lambda x: x["sequence"]
+        )
+
+        # 9. Maksimum geçmiş sınırı
         if len(playlist_entries) > MAX_SEGMENTS:
 
             playlist_entries = (
                 playlist_entries[-MAX_SEGMENTS:]
             )
 
-        if not playlist_entries:
-
-            print(
-                "M3U8 için segment yok."
-            )
-
-            return
-
-        first_sequence = playlist_entries[
-            0
-        ]["sequence"]
-
+        # 10. Yeni M3U8'i güvenli oluştur
         temp_m3u8 = (
             M3U8_FILENAME + ".tmp"
+        )
+
+        first_sequence = (
+            playlist_entries[0]["sequence"]
         )
 
         with open(
@@ -464,10 +634,7 @@ def main():
         ) as f:
 
             f.write("#EXTM3U\n")
-
-            f.write(
-                "#EXT-X-VERSION:3\n"
-            )
+            f.write("#EXT-X-VERSION:3\n")
 
             f.write(
                 f"#EXT-X-TARGETDURATION:"
@@ -491,15 +658,32 @@ def main():
                     f"{entry['filename']}\n"
                 )
 
+        # Playlist tamamen hazır olduktan sonra değiştir
         os.replace(
             temp_m3u8,
             M3U8_FILENAME
         )
 
+        # 11. State'i yalnızca başarılı segmentlere göre güncelle
+        last_successful_source = max(
+            entry["source_sequence"]
+            for entry in successful_entries
+        )
+
+        last_successful_local = max(
+            entry["sequence"]
+            for entry in successful_entries
+        )
+
+        save_state(
+            last_successful_source,
+            last_successful_local
+        )
+
+        # 12. Playlist dışındaki eski segmentleri sil
         current_files = {
 
             entry["filename"]
-
             for entry in playlist_entries
 
         }
@@ -509,26 +693,22 @@ def main():
         )
 
         print(
-            f"Başarılı: "
-            f"{len(playlist_entries)} "
-            f"segmentlik geçmiş oluşturuldu."
+            f"Toplam geçmiş: "
+            f"{len(playlist_entries)} segment"
         )
 
         print(
-            f"İlk MEDIA-SEQUENCE: "
-            f"{first_sequence}"
+            f"Son yerel segment: "
+            f"{last_successful_local}"
         )
 
         print(
-            f"Son MEDIA-SEQUENCE: "
-            f"{playlist_entries[-1]['sequence']}"
+            f"Son kaynak segment: "
+            f"{last_successful_source}"
         )
 
     except Exception as error:
-
-        print(
-            f"Genel hata: {error}"
-        )
+        print(f"Genel hata: {error}")
 
 
 if __name__ == "__main__":

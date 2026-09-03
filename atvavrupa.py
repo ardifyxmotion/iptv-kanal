@@ -8,15 +8,11 @@ from urllib.parse import urljoin
 STREAM_DIR = "streams"
 M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
 
-BASE_URL = (
-    "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
-)
+# GitHub üzerindeki ham (raw) segment adresi
+BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 
+# M3U8 içinde tutulabilecek maksimum segment sayısı
 MAX_SEGMENTS = 500
-
-# 4K çıktı çözünürlüğü
-OUTPUT_WIDTH = 3840
-OUTPUT_HEIGHT = 2160
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -24,7 +20,7 @@ HEADERS = {
 
 
 def get_stream_url():
-    """Kaynağın sunduğu en yüksek yayın kalitesini bulur."""
+    """Streamlink ile gerçek canlı yayın M3U8 adresini bulur."""
 
     try:
         result = subprocess.run(
@@ -54,7 +50,13 @@ def get_stream_url():
 
 
 def get_playlist(stream_url):
-    """Kaynak M3U8 listesini ve segment bilgilerini alır."""
+    """
+    Kaynak M3U8 dosyasını okur.
+
+    - Gerçek MEDIA-SEQUENCE değerini alır.
+    - Gerçek TARGETDURATION değerini alır.
+    - Her segmentin gerçek EXTINF süresini korur.
+    """
 
     response = requests.get(
         stream_url,
@@ -75,7 +77,6 @@ def get_playlist(stream_url):
     segments = []
 
     for line in lines:
-
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
             try:
                 media_sequence = int(
@@ -92,38 +93,37 @@ def get_playlist(stream_url):
             except ValueError:
                 pass
 
+    # EXTINF ve hemen ardından gelen segment URL'lerini eşleştir
     index = 0
 
     while index < len(lines):
-
         line = lines[index]
 
         if line.startswith("#EXTINF:"):
-
             try:
-                duration = (
-                    line.split(":", 1)[1]
-                    .split(",", 1)[0]
-                )
+                duration = line.split(
+                    ":", 1
+                )[1].split(",", 1)[0]
             except IndexError:
                 index += 1
                 continue
 
             next_index = index + 1
 
+            # EXTINF sonrasındaki segment URL'sini bul
             while next_index < len(lines):
-
                 next_line = lines[next_index]
 
                 if not next_line.startswith("#"):
+                    segment_url = urljoin(
+                        stream_url,
+                        next_line
+                    )
 
                     segments.append(
                         {
                             "duration": duration,
-                            "url": urljoin(
-                                stream_url,
-                                next_line
-                            )
+                            "url": segment_url
                         }
                     )
 
@@ -137,14 +137,14 @@ def get_playlist(stream_url):
     if not segments:
         return None
 
+    # Kaynakta 500'den fazla segment varsa sadece son 500'ü tut.
+    # MEDIA-SEQUENCE kesilen segment sayısı kadar artırılır.
     if len(segments) > MAX_SEGMENTS:
-
-        removed = (
-            len(segments) - MAX_SEGMENTS
-        )
+        removed_segments = len(segments) - MAX_SEGMENTS
 
         segments = segments[-MAX_SEGMENTS:]
-        media_sequence += removed
+
+        media_sequence += removed_segments
 
     return {
         "media_sequence": media_sequence,
@@ -153,29 +153,13 @@ def get_playlist(stream_url):
     }
 
 
-def upscale_segment(item):
-    """
-    Segmenti indirir ve FFmpeg ile 4K çözünürlüğe
-    upscale ederek yeniden kodlar.
-
-    Lanczos ölçekleme ve hafif keskinleştirme kullanılır.
-    """
+def download_segment(item):
+    """Tek bir segmenti indirir."""
 
     filename, url = item
-
-    filepath = os.path.join(
-        STREAM_DIR,
-        filename
-    )
-
-    if os.path.exists(filepath):
-        return filename
-
-    source_path = filepath + ".source.ts"
-    temp_path = filepath + ".tmp.ts"
+    filepath = os.path.join(STREAM_DIR, filename)
 
     try:
-
         response = requests.get(
             url,
             headers=HEADERS,
@@ -184,113 +168,36 @@ def upscale_segment(item):
 
         response.raise_for_status()
 
-        with open(source_path, "wb") as f:
+        # Geçici dosyaya yazıp başarılı olursa değiştir.
+        temp_path = filepath + ".tmp"
+
+        with open(temp_path, "wb") as f:
             f.write(response.content)
 
-        # Önce GPU destekli NVIDIA kodlama denenir.
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-i", source_path,
-
-            "-vf",
-            (
-                f"scale={OUTPUT_WIDTH}:"
-                f"{OUTPUT_HEIGHT}:"
-                "flags=lanczos,"
-                "unsharp=5:5:0.7:5:5:0"
-            ),
-
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-
-            "-c:a", "aac",
-            "-b:a", "192k",
-
-            "-f", "mpegts",
-            temp_path
-        ]
-
-        result = subprocess.run(
-            ffmpeg_command,
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-
-        if result.returncode != 0:
-
-            print(
-                f"FFmpeg hatası ({filename}):"
-            )
-
-            print(result.stderr[-1000:])
-
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-
-            return None
-
-        os.replace(
-            temp_path,
-            filepath
-        )
-
-        if os.path.exists(source_path):
-            os.remove(source_path)
-
-        print(
-            f"4K işlendi: {filename}"
-        )
+        os.replace(temp_path, filepath)
 
         return filename
 
     except Exception as error:
-
         print(
-            f"Segment işlenemedi: "
+            f"Segment indirilemedi: "
             f"{filename} -> {error}"
         )
 
         return None
 
-    finally:
-
-        if os.path.exists(source_path):
-            try:
-                os.remove(source_path)
-            except OSError:
-                pass
-
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-
 
 def clean_old_segments(current_files):
-    """Eski ve kullanılmayan segmentleri temizler."""
+    """Mevcut M3U8 listesinde olmayan eski segmentleri siler."""
 
     existing_files = glob.glob(
-        os.path.join(
-            STREAM_DIR,
-            "seg_*"
-        )
+        os.path.join(STREAM_DIR, "seg_*")
     )
 
     for filepath in existing_files:
+        filename = os.path.basename(filepath)
 
-        filename = os.path.basename(
-            filepath
-        )
-
-        if (
-            filename.endswith(".ts")
-            and filename not in current_files
-        ):
-
+        if filename.endswith(".ts") and filename not in current_files:
             try:
                 os.remove(filepath)
             except OSError:
@@ -298,147 +205,96 @@ def clean_old_segments(current_files):
 
 
 def main():
-
-    os.makedirs(
-        STREAM_DIR,
-        exist_ok=True
-    )
+    os.makedirs(STREAM_DIR, exist_ok=True)
 
     try:
-
-        # 1. En yüksek mevcut kaynak kalitesini bul
+        # 1. Gerçek canlı yayın adresini bul
         stream_url = get_stream_url()
 
         if not stream_url:
             return
 
-        print(
-            "Kaynak yayın bulundu:"
-        )
+        print(f"Canlı yayın bulundu:\n{stream_url}")
 
-        print(stream_url)
-
-        # 2. M3U8 listesini al
-        playlist = get_playlist(
-            stream_url
-        )
+        # 2. Kaynak M3U8 bilgilerini al
+        playlist = get_playlist(stream_url)
 
         if not playlist:
-
-            print(
-                "M3U8 içerisinde "
-                "segment bulunamadı."
-            )
-
+            print("M3U8 içerisinde segment bulunamadı.")
             return
 
-        media_sequence = (
-            playlist["media_sequence"]
-        )
-
-        target_duration = (
-            playlist["target_duration"]
-        )
-
-        segments = (
-            playlist["segments"]
-        )
+        media_sequence = playlist["media_sequence"]
+        target_duration = playlist["target_duration"]
+        segments = playlist["segments"]
 
         print(
-            f"İşlenecek segment: "
-            f"{len(segments)}"
+            f"Segment sayısı: {len(segments)} | "
+            f"MEDIA-SEQUENCE: {media_sequence}"
         )
 
-        # 3. Segment isimlerini oluştur
-        files_to_process = []
+        # 3. Gerçek MEDIA-SEQUENCE değerine göre dosya adlarını oluştur
+        files_to_download = []
 
-        for index, segment in enumerate(
-            segments
-        ):
-
-            sequence_number = (
-                media_sequence + index
-            )
+        for index, segment in enumerate(segments):
+            sequence_number = media_sequence + index
 
             filename = (
                 f"seg_{sequence_number}.ts"
             )
 
-            files_to_process.append(
+            files_to_download.append(
                 (
                     filename,
                     segment["url"]
                 )
             )
 
-        # 4. Segmentleri paralel olarak 4K işle
-        #
-        # 4K yeniden kodlama çok fazla CPU kullandığı için
-        # aynı anda 2 işlem kullanılır.
+        # 4. Segmentleri paralel indir
         with ThreadPoolExecutor(
-            max_workers=2
+            max_workers=10
         ) as executor:
 
-            results = list(
+            download_results = list(
                 executor.map(
-                    upscale_segment,
-                    files_to_process
+                    download_segment,
+                    files_to_download
                 )
             )
 
         successful_files = {
             filename
-            for filename in results
+            for filename in download_results
             if filename is not None
         }
 
         if not successful_files:
-
-            print(
-                "Hiçbir segment "
-                "işlenemedi."
-            )
-
+            print("Hiçbir segment indirilemedi.")
             return
 
-        # 5. Başarılı segmentleri M3U8 listesine ekle
+        # 5. M3U8'e yalnızca başarıyla indirilen segmentleri ekle
         playlist_entries = []
 
-        for index, segment in enumerate(
-            segments
-        ):
-
-            sequence_number = (
-                media_sequence + index
-            )
+        for index, segment in enumerate(segments):
+            sequence_number = media_sequence + index
 
             filename = (
                 f"seg_{sequence_number}.ts"
             )
 
             if filename in successful_files:
-
                 playlist_entries.append(
                     {
-                        "sequence":
-                            sequence_number,
-
-                        "duration":
-                            segment["duration"],
-
-                        "filename":
-                            filename
+                        "sequence": sequence_number,
+                        "duration": segment["duration"],
+                        "filename": filename
                     }
                 )
 
         if not playlist_entries:
-
-            print(
-                "Geçerli segment yok."
-            )
-
+            print("M3U8 için geçerli segment yok.")
             return
 
+        # İlk başarılı segmentin gerçek sıra numarası
         first_sequence = (
             playlist_entries[0]["sequence"]
         )
@@ -463,8 +319,8 @@ def main():
                 f"{first_sequence}\n"
             )
 
+            # Gerçek EXTINF sürelerini yaz
             for entry in playlist_entries:
-
                 f.write(
                     f"#EXTINF:"
                     f"{entry['duration']},\n"
@@ -481,31 +337,20 @@ def main():
             for entry in playlist_entries
         }
 
-        clean_old_segments(
-            current_files
+        clean_old_segments(current_files)
+
+        print(
+            f"Başarılı: "
+            f"{len(playlist_entries)} segment yazıldı."
         )
 
         print(
-            f"\nTamamlandı!"
-        )
-
-        print(
-            f"4K olarak işlenen "
-            f"segment sayısı: "
-            f"{len(playlist_entries)}"
-        )
-
-        print(
-            f"Çözünürlük: "
-            f"{OUTPUT_WIDTH}x"
-            f"{OUTPUT_HEIGHT}"
+            f"MEDIA-SEQUENCE: "
+            f"{first_sequence}"
         )
 
     except Exception as error:
-
-        print(
-            f"Genel hata: {error}"
-        )
+        print(f"Genel hata: {error}")
 
 
 if __name__ == "__main__":

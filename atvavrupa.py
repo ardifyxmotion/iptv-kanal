@@ -15,34 +15,19 @@ BASE_URL = (
 
 MAX_SEGMENTS = 500
 
+# 4K çıktı çözünürlüğü
+OUTPUT_WIDTH = 3840
+OUTPUT_HEIGHT = 2160
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
 
 def get_stream_url():
-    """
-    Streamlink ile mevcut en yüksek kaliteli
-    canlı yayın M3U8 adresini bulur.
-    """
+    """Kaynağın sunduğu en yüksek yayın kalitesini bulur."""
 
     try:
-        quality_result = subprocess.run(
-            [
-                "streamlink",
-                "https://www.atvavrupa.tv/canli-yayin"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-
-        print("Bulunan yayın kaliteleri:")
-        print(
-            quality_result.stdout
-            or quality_result.stderr
-        )
-
         result = subprocess.run(
             [
                 "streamlink",
@@ -70,7 +55,7 @@ def get_stream_url():
 
 
 def get_playlist(stream_url):
-    """Kaynak M3U8 dosyasını okur."""
+    """Kaynak M3U8 listesini ve segment bilgilerini alır."""
 
     response = requests.get(
         stream_url,
@@ -94,13 +79,17 @@ def get_playlist(stream_url):
 
         if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
             try:
-                media_sequence = int(line.split(":", 1)[1])
+                media_sequence = int(
+                    line.split(":", 1)[1]
+                )
             except ValueError:
                 pass
 
         elif line.startswith("#EXT-X-TARGETDURATION:"):
             try:
-                target_duration = int(line.split(":", 1)[1])
+                target_duration = int(
+                    line.split(":", 1)[1]
+                )
             except ValueError:
                 pass
 
@@ -114,8 +103,7 @@ def get_playlist(stream_url):
 
             try:
                 duration = (
-                    line
-                    .split(":", 1)[1]
+                    line.split(":", 1)[1]
                     .split(",", 1)[0]
                 )
             except IndexError:
@@ -130,15 +118,13 @@ def get_playlist(stream_url):
 
                 if not next_line.startswith("#"):
 
-                    segment_url = urljoin(
-                        stream_url,
-                        next_line
-                    )
-
                     segments.append(
                         {
                             "duration": duration,
-                            "url": segment_url
+                            "url": urljoin(
+                                stream_url,
+                                next_line
+                            )
                         }
                     )
 
@@ -154,14 +140,12 @@ def get_playlist(stream_url):
 
     if len(segments) > MAX_SEGMENTS:
 
-        removed_segments = (
-            len(segments)
-            - MAX_SEGMENTS
+        removed = (
+            len(segments) - MAX_SEGMENTS
         )
 
         segments = segments[-MAX_SEGMENTS:]
-
-        media_sequence += removed_segments
+        media_sequence += removed
 
     return {
         "media_sequence": media_sequence,
@@ -170,8 +154,13 @@ def get_playlist(stream_url):
     }
 
 
-def download_segment(item):
-    """Tek bir segmenti indirir."""
+def upscale_segment(item):
+    """
+    Segmenti indirir ve FFmpeg ile 4K çözünürlüğe
+    upscale ederek yeniden kodlar.
+
+    Lanczos ölçekleme ve hafif keskinleştirme kullanılır.
+    """
 
     filename, url = item
 
@@ -183,6 +172,9 @@ def download_segment(item):
     if os.path.exists(filepath):
         return filename
 
+    source_path = filepath + ".source.ts"
+    temp_path = filepath + ".tmp.ts"
+
     try:
 
         response = requests.get(
@@ -193,27 +185,94 @@ def download_segment(item):
 
         response.raise_for_status()
 
-        temp_path = filepath + ".tmp"
-
-        with open(temp_path, "wb") as f:
+        with open(source_path, "wb") as f:
             f.write(response.content)
 
-        os.replace(temp_path, filepath)
+        # Önce GPU destekli NVIDIA kodlama denenir.
+        ffmpeg_command = [
+            "ffmpeg",
+            "-y",
+            "-i", source_path,
+
+            "-vf",
+            (
+                f"scale={OUTPUT_WIDTH}:"
+                f"{OUTPUT_HEIGHT}:"
+                "flags=lanczos,"
+                "unsharp=5:5:0.7:5:5:0"
+            ),
+
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+
+            "-c:a", "aac",
+            "-b:a", "192k",
+
+            "-f", "mpegts",
+            temp_path
+        ]
+
+        result = subprocess.run(
+            ffmpeg_command,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+
+        if result.returncode != 0:
+
+            print(
+                f"FFmpeg hatası ({filename}):"
+            )
+
+            print(result.stderr[-1000:])
+
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            return None
+
+        os.replace(
+            temp_path,
+            filepath
+        )
+
+        if os.path.exists(source_path):
+            os.remove(source_path)
+
+        print(
+            f"4K işlendi: {filename}"
+        )
 
         return filename
 
     except Exception as error:
 
         print(
-            f"Segment indirilemedi: "
+            f"Segment işlenemedi: "
             f"{filename} -> {error}"
         )
 
         return None
 
+    finally:
+
+        if os.path.exists(source_path):
+            try:
+                os.remove(source_path)
+            except OSError:
+                pass
+
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
 
 def clean_old_segments(current_files):
-    """M3U8 listesinde olmayan eski segmentleri siler."""
+    """Eski ve kullanılmayan segmentleri temizler."""
 
     existing_files = glob.glob(
         os.path.join(
@@ -224,7 +283,9 @@ def clean_old_segments(current_files):
 
     for filepath in existing_files:
 
-        filename = os.path.basename(filepath)
+        filename = os.path.basename(
+            filepath
+        )
 
         if (
             filename.endswith(".ts")
@@ -246,17 +307,22 @@ def main():
 
     try:
 
+        # 1. En yüksek mevcut kaynak kalitesini bul
         stream_url = get_stream_url()
 
         if not stream_url:
             return
 
         print(
-            f"\nSeçilen en yüksek kalite "
-            f"yayın adresi:\n{stream_url}"
+            "Kaynak yayın bulundu:"
         )
 
-        playlist = get_playlist(stream_url)
+        print(stream_url)
+
+        # 2. M3U8 listesini al
+        playlist = get_playlist(
+            stream_url
+        )
 
         if not playlist:
 
@@ -267,48 +333,63 @@ def main():
 
             return
 
-        media_sequence = playlist["media_sequence"]
-        target_duration = playlist["target_duration"]
-        segments = playlist["segments"]
-
-        print(
-            f"Segment sayısı: "
-            f"{len(segments)} | "
-            f"MEDIA-SEQUENCE: "
-            f"{media_sequence}"
+        media_sequence = (
+            playlist["media_sequence"]
         )
 
-        files_to_download = []
+        target_duration = (
+            playlist["target_duration"]
+        )
 
-        for index, segment in enumerate(segments):
+        segments = (
+            playlist["segments"]
+        )
 
-            sequence_number = media_sequence + index
+        print(
+            f"İşlenecek segment: "
+            f"{len(segments)}"
+        )
+
+        # 3. Segment isimlerini oluştur
+        files_to_process = []
+
+        for index, segment in enumerate(
+            segments
+        ):
+
+            sequence_number = (
+                media_sequence + index
+            )
 
             filename = (
                 f"seg_{sequence_number}.ts"
             )
 
-            files_to_download.append(
+            files_to_process.append(
                 (
                     filename,
                     segment["url"]
                 )
             )
 
+        # 4. Segmentleri paralel olarak 4K işle
+        #
+        # 4K yeniden kodlama çok fazla CPU kullandığı için
+        # aynı anda 2 işlem kullanılır.
         with ThreadPoolExecutor(
-            max_workers=10
+            max_workers=2
         ) as executor:
 
-            download_results = list(
+            results = list(
                 executor.map(
-                    download_segment,
-                    files_to_download
+                    upscale_segment,
+                    files_to_process
                 )
             )
 
         successful_files = {
             filename
-            for filename in download_results
+            for filename in results
             if filename is not None
         }
 
@@ -316,16 +397,21 @@ def main():
 
             print(
                 "Hiçbir segment "
-                "indirilemedi."
+                "işlenemedi."
             )
 
             return
 
+        # 5. Başarılı segmentleri M3U8 listesine ekle
         playlist_entries = []
 
-        for index, segment in enumerate(segments):
+        for index, segment in enumerate(
+            segments
+        ):
 
-            sequence_number = media_sequence + index
+            sequence_number = (
+                media_sequence + index
+            )
 
             filename = (
                 f"seg_{sequence_number}.ts"
@@ -335,17 +421,21 @@ def main():
 
                 playlist_entries.append(
                     {
-                        "sequence": sequence_number,
-                        "duration": segment["duration"],
-                        "filename": filename
+                        "sequence":
+                            sequence_number,
+
+                        "duration":
+                            segment["duration"],
+
+                        "filename":
+                            filename
                     }
                 )
 
         if not playlist_entries:
 
             print(
-                "M3U8 için geçerli "
-                "segment yok."
+                "Geçerli segment yok."
             )
 
             return
@@ -354,6 +444,7 @@ def main():
             playlist_entries[0]["sequence"]
         )
 
+        # 6. Yeni M3U8 dosyasını oluştur
         with open(
             M3U8_FILENAME,
             "w",
@@ -385,27 +476,30 @@ def main():
                     f"{entry['filename']}\n"
                 )
 
+        # 7. Eski segmentleri temizle
         current_files = {
             entry["filename"]
             for entry in playlist_entries
         }
 
-        clean_old_segments(current_files)
-
-        print(
-            f"\nBaşarılı: "
-            f"{len(playlist_entries)} "
-            f"segment yazıldı."
+        clean_old_segments(
+            current_files
         )
 
         print(
-            f"MEDIA-SEQUENCE: "
-            f"{first_sequence}"
+            f"\nTamamlandı!"
         )
 
         print(
-            "\nKullanılan kalite: "
-            "Kaynağın sunduğu en yüksek kalite"
+            f"4K olarak işlenen "
+            f"segment sayısı: "
+            f"{len(playlist_entries)}"
+        )
+
+        print(
+            f"Çözünürlük: "
+            f"{OUTPUT_WIDTH}x"
+            f"{OUTPUT_HEIGHT}"
         )
 
     except Exception as error:

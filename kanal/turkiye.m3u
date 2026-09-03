@@ -22,7 +22,7 @@ http://live.duhnet.tv/S2/HLS_LIVE/eurodnp/playlist.m3u8
 https://rnttwmjcin.turknet.ercdn.net/lcpmvefbyo/atv/atv_1080p.m3u8
 
 #EXTINF:-1 tvg-name="ATV",ATV Avrupa
-http://line.tivi-one.net:80/play/live.php?mac=00:1A:79:5D:91:44&stream=196666&extension=ts&play_token=mVvbrNqoax
+https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/refs/heads/main/streams/atvavrupa.m3u8
 
 #EXTINF:-1 tvg-name="Star TV",Star TV
 https://dogus.daioncdn.net/startv/startv_720p.m3u8?app=a20ac41e-bdc3-4aa1-934d-26b484480ac9&ce=3&sid=8l4w3lst4co5

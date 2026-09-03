@@ -9,8 +9,7 @@ STREAM_DIR = "streams"
 M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
 
 BASE_URL = (
-    "https://raw.githubusercontent.com/"
-    "ardifyxmotion/iptv-kanal/main/streams/"
+    "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 )
 
 MAX_SEGMENTS = 500

@@ -1,43 +1,26 @@
 import os
-import re
-import json
 import glob
-import time
-import hashlib
 import subprocess
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin
 
-# ============================================================
-# ATV AVRUPA - KALICI DVR KAYIT SİSTEMİ
-#
-# Mantık:
-# - Her çalıştırmada kaynak canlı playlist okunur.
-# - Daha önce kaydedilmiş segmentler M3U8'den okunur.
-# - Yeni segmentler mevcut geçmişe eklenir.
-# - Aynı segment tekrar eklenmez.
-# - En fazla MAX_SEGMENTS kadar geçmiş korunur.
-# - M3U8 dosyası atomik olarak güncellenir.
-# ============================================================
-
 STREAM_DIR = "streams"
 M3U8_FILENAME = os.path.join(STREAM_DIR, "atvavrupa.m3u8")
 
-# GitHub RAW segment adresi
+# GitHub üzerindeki ham (raw) segment adresi
 BASE_URL = "https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/streams/"
 
-# Yaklaşık 24 saatlik geçmiş için değer.
-# Ortalama segment süresine göre gerektiğinde artırılabilir.
-MAX_SEGMENTS = 10000
+# M3U8 içinde tutulabilecek maksimum segment sayısı
+MAX_SEGMENTS = 500
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-
 def get_stream_url():
     """Streamlink ile gerçek canlı yayın M3U8 adresini bulur."""
+
     try:
         result = subprocess.run(
             [
@@ -48,7 +31,7 @@ def get_stream_url():
             ],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=30
         )
 
         stream_url = result.stdout.strip()
@@ -64,21 +47,19 @@ def get_stream_url():
         print(f"Streamlink hatası: {error}")
         return None
 
-
 def get_playlist(stream_url):
     """
-    Kaynak canlı M3U8 listesini okur.
+    Kaynak M3U8 dosyasını okur.
 
-    Segmentler MEDIA-SEQUENCE yerine gerçek URL üzerinden
-    benzersiz olarak takip edilir. Böylece yayın sağlayıcısının
-    sıra numarasını sıfırlaması durumunda eski segmentlerin
-    üzerine yanlışlıkla yazılması engellenir.
+    - Gerçek MEDIA-SEQUENCE değerini alır.
+    - Gerçek TARGETDURATION değerini alır.
+    - Her segmentin gerçek EXTINF süresini korur.
     """
 
     response = requests.get(
         stream_url,
         headers=HEADERS,
-        timeout=30
+        timeout=20
     )
 
     response.raise_for_status()
@@ -89,11 +70,20 @@ def get_playlist(stream_url):
         if line.strip()
     ]
 
+    media_sequence = 0
     target_duration = 10
     segments = []
 
     for line in lines:
-        if line.startswith("#EXT-X-TARGETDURATION:"):
+        if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
+            try:
+                media_sequence = int(
+                    line.split(":", 1)[1]
+                )
+            except ValueError:
+                pass
+
+        elif line.startswith("#EXT-X-TARGETDURATION:"):
             try:
                 target_duration = int(
                     line.split(":", 1)[1]
@@ -101,6 +91,7 @@ def get_playlist(stream_url):
             except ValueError:
                 pass
 
+    # EXTINF ve hemen ardından gelen segment URL'lerini eşleştir
     index = 0
 
     while index < len(lines):
@@ -108,22 +99,19 @@ def get_playlist(stream_url):
 
         if line.startswith("#EXTINF:"):
             try:
-                duration = float(
-                    line.split(
-                        ":", 1
-                    )[1].split(",", 1)[0]
-                )
-            except (IndexError, ValueError):
+                duration = line.split(
+                    ":", 1
+                )[1].split(",", 1)[0]
+            except IndexError:
                 index += 1
                 continue
 
             next_index = index + 1
 
+            # EXTINF sonrasındaki segment URL'sini bul
             while next_index < len(lines):
                 next_line = lines[next_index]
 
-                # EXTINF sonrasında URL bulunana kadar
-                # diğer HLS etiketlerini geç.
                 if not next_line.startswith("#"):
                     segment_url = urljoin(
                         stream_url,
@@ -147,162 +135,43 @@ def get_playlist(stream_url):
     if not segments:
         return None
 
+    # Kaynakta 500'den fazla segment varsa sadece son 500'ü tut.
+    # MEDIA-SEQUENCE kesilen segment sayısı kadar artırılır.
+    if len(segments) > MAX_SEGMENTS:
+        removed_segments = len(segments) - MAX_SEGMENTS
+
+        segments = segments[-MAX_SEGMENTS:]
+
+        media_sequence += removed_segments
+
     return {
+        "media_sequence": media_sequence,
         "target_duration": target_duration,
         "segments": segments
     }
 
-
-def make_segment_filename(segment_url):
-    """
-    Segment URL'sinden benzersiz dosya adı üretir.
-
-    Sadece MEDIA-SEQUENCE kullanılmaz çünkü bazı yayınlarda
-    sıra numaraları tekrar başlayabilir.
-    """
-
-    url_hash = hashlib.sha256(
-        segment_url.encode("utf-8")
-    ).hexdigest()[:24]
-
-    return f"seg_{url_hash}.ts"
-
-
-def read_existing_playlist():
-    """
-    Daha önce oluşturulmuş DVR playlistini okur.
-
-    M3U8'deki segmentler korunur ve sonraki GitHub Actions
-    çalıştırmasında yeni segmentlerle birleştirilir.
-    """
-
-    entries = []
-
-    if not os.path.exists(M3U8_FILENAME):
-        return entries
-
-    try:
-        with open(
-            M3U8_FILENAME,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            lines = [
-                line.strip()
-                for line in file
-                if line.strip()
-            ]
-
-        index = 0
-
-        while index < len(lines):
-            line = lines[index]
-
-            if line.startswith("#EXTINF:"):
-                try:
-                    duration = float(
-                        line.split(
-                            ":", 1
-                        )[1].split(",", 1)[0]
-                    )
-                except (IndexError, ValueError):
-                    index += 1
-                    continue
-
-                if index + 1 < len(lines):
-                    segment_path = lines[
-                        index + 1
-                    ]
-
-                    filename = (
-                        segment_path
-                        .split("?", 1)[0]
-                        .rsplit("/", 1)[-1]
-                    )
-
-                    filepath = os.path.join(
-                        STREAM_DIR,
-                        filename
-                    )
-
-                    # Segment dosyası gerçekten mevcutsa
-                    # DVR geçmişinde tut.
-                    if (
-                        filename.startswith("seg_")
-                        and filename.endswith(".ts")
-                        and os.path.exists(filepath)
-                    ):
-                        entries.append(
-                            {
-                                "duration": duration,
-                                "filename": filename
-                            }
-                        )
-
-                    index += 1
-
-            index += 1
-
-    except Exception as error:
-        print(
-            f"Eski DVR listesi okunamadı: "
-            f"{error}"
-        )
-
-    return entries
-
-
 def download_segment(item):
-    """
-    Segmenti indirir.
-
-    Dosya daha önce indirilmişse tekrar indirmez.
-    """
+    """Tek bir segmenti indirir."""
 
     filename, url = item
-
-    filepath = os.path.join(
-        STREAM_DIR,
-        filename
-    )
-
-    if (
-        os.path.exists(filepath)
-        and os.path.getsize(filepath) > 100
-    ):
-        return filename
-
-    temp_path = filepath + ".tmp"
+    filepath = os.path.join(STREAM_DIR, filename)
 
     try:
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=60
+            timeout=30
         )
 
         response.raise_for_status()
 
-        content = response.content
+        # Geçici dosyaya yazıp başarılı olursa değiştir.
+        temp_path = filepath + ".tmp"
 
-        if len(content) < 100:
-            print(
-                f"Geçersiz veya boş segment: "
-                f"{filename}"
-            )
-            return None
+        with open(temp_path, "wb") as f:
+            f.write(response.content)
 
-        with open(
-            temp_path,
-            "wb"
-        ) as file:
-            file.write(content)
-
-        os.replace(
-            temp_path,
-            filepath
-        )
+        os.replace(temp_path, filepath)
 
         return filename
 
@@ -312,344 +181,172 @@ def download_segment(item):
             f"{filename} -> {error}"
         )
 
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except OSError:
-            pass
-
         return None
 
+def clean_old_segments(current_files):
+    """Mevcut M3U8 listesinde olmayan eski segmentleri siler."""
 
-def write_playlist(
-    entries,
-    target_duration
-):
-    """
-    DVR M3U8 dosyasını atomik olarak yazar.
-
-    Önce geçici dosya oluşturulur. Yazma tamamen başarılı
-    olduğunda eski playlist değiştirilir. Böylece GitHub
-    Actions tam yazım sırasında kesilse bile playlist bozulmaz.
-    """
-
-    if not entries:
-        return False
-
-    temp_playlist = (
-        M3U8_FILENAME + ".tmp"
+    existing_files = glob.glob(
+        os.path.join(STREAM_DIR, "seg_*")
     )
 
-    try:
-        with open(
-            temp_playlist,
-            "w",
-            encoding="utf-8"
-        ) as file:
+    for filepath in existing_files:
+        filename = os.path.basename(filepath)
 
-            file.write("#EXTM3U\n")
-            file.write("#EXT-X-VERSION:3\n")
-
-            file.write(
-                "#EXT-X-TARGETDURATION:"
-                f"{int(target_duration)}\n"
-            )
-
-            # DVR playlistinin sıra numarası sabit olarak
-            # sıfırdan başlatılır. Dosya sırası asıl geçmişi
-            # belirler.
-            file.write(
-                "#EXT-X-MEDIA-SEQUENCE:0\n"
-            )
-
-            for entry in entries:
-                file.write(
-                    f"#EXTINF:"
-                    f"{entry['duration']:.3f},\n"
-                )
-
-                file.write(
-                    f"{BASE_URL}"
-                    f"{entry['filename']}\n"
-                )
-
-        os.replace(
-            temp_playlist,
-            M3U8_FILENAME
-        )
-
-        return True
-
-    except Exception as error:
-        print(
-            f"M3U8 yazılamadı: {error}"
-        )
-
-        try:
-            if os.path.exists(temp_playlist):
-                os.remove(temp_playlist)
-        except OSError:
-            pass
-
-        return False
-
-
-def clean_old_segments(valid_files):
-    """
-    Yalnızca MAX_SEGMENTS sınırının dışına çıkan
-    segment dosyalarını siler.
-    """
-
-    for filepath in glob.glob(
-        os.path.join(
-            STREAM_DIR,
-            "seg_*.ts"
-        )
-    ):
-        filename = os.path.basename(
-            filepath
-        )
-
-        if filename not in valid_files:
+        if filename.endswith(".ts") and filename not in current_files:
             try:
                 os.remove(filepath)
             except OSError:
                 pass
 
-
 def main():
-    os.makedirs(
-        STREAM_DIR,
-        exist_ok=True
-    )
+    os.makedirs(STREAM_DIR, exist_ok=True)
 
     try:
-        # ----------------------------------------------------
-        # 1. ÖNCE ESKİ DVR GEÇMİŞİNİ OKU
-        # ----------------------------------------------------
-        old_entries = (
-            read_existing_playlist()
-        )
-
-        print(
-            f"Korunan eski DVR segmenti: "
-            f"{len(old_entries)}"
-        )
-
-        existing_files = {
-            entry["filename"]
-            for entry in old_entries
-        }
-
-        # ----------------------------------------------------
-        # 2. GÜNCEL CANLI YAYINI BUL
-        # ----------------------------------------------------
+        # 1. Gerçek canlı yayın adresini bul
         stream_url = get_stream_url()
 
         if not stream_url:
             return
 
-        print(
-            "Canlı yayın bulundu."
-        )
+        print(f"Canlı yayın bulundu:\n{stream_url}")
 
-        # ----------------------------------------------------
-        # 3. GÜNCEL PLAYLIST'I OKU
-        # ----------------------------------------------------
-        playlist = get_playlist(
-            stream_url
-        )
+        # 2. Kaynak M3U8 bilgilerini al
+        playlist = get_playlist(stream_url)
 
         if not playlist:
-            print(
-                "Kaynak M3U8 içinde "
-                "segment bulunamadı."
-            )
+            print("M3U8 içerisinde segment bulunamadı.")
             return
 
-        target_duration = playlist[
-            "target_duration"
-        ]
-
-        source_segments = playlist[
-            "segments"
-        ]
+        media_sequence = playlist["media_sequence"]
+        target_duration = playlist["target_duration"]
+        segments = playlist["segments"]
 
         print(
-            f"Kaynak segment sayısı: "
-            f"{len(source_segments)}"
+            f"Segment sayısı: {len(segments)} | "
+            f"MEDIA-SEQUENCE: {media_sequence}"
         )
 
-        # ----------------------------------------------------
-        # 4. SADECE YENİ SEGMENTLERİ BELİRLE
-        # ----------------------------------------------------
-        new_items = []
+        # 3. Gerçek MEDIA-SEQUENCE değerine göre dosya adlarını oluştur
+        files_to_download = []
 
-        for segment in source_segments:
-            filename = make_segment_filename(
-                segment["url"]
+        for index, segment in enumerate(segments):
+            sequence_number = media_sequence + index
+
+            filename = (
+                f"seg_{sequence_number}.ts"
             )
 
-            if filename not in existing_files:
-                new_items.append(
-                    (
-                        filename,
-                        segment["url"],
-                        segment["duration"]
-                    )
+            files_to_download.append(
+                (
+                    filename,
+                    segment["url"]
                 )
+            )
 
-        print(
-            f"Yeni segment adayı: "
-            f"{len(new_items)}"
-        )
+        # 4. Segmentleri paralel indir
+        with ThreadPoolExecutor(
+            max_workers=10
+        ) as executor:
 
-        # ----------------------------------------------------
-        # 5. YENİ SEGMENTLERİ PARALEL İNDİR
-        # ----------------------------------------------------
-        download_items = [
-            (filename, url)
-            for filename, url, duration
-            in new_items
-        ]
-
-        successful_files = set()
-
-        if download_items:
-            with ThreadPoolExecutor(
-                max_workers=10
-            ) as executor:
-
-                results = list(
-                    executor.map(
-                        download_segment,
-                        download_items
-                    )
+            download_results = list(
+                executor.map(
+                    download_segment,
+                    files_to_download
                 )
+            )
 
-            successful_files = {
-                filename
-                for filename in results
-                if filename is not None
-            }
+        successful_files = {
+            filename
+            for filename in download_results
+            if filename is not None
+        }
 
-        print(
-            f"Başarıyla indirilen yeni segment: "
-            f"{len(successful_files)}"
-        )
+        if not successful_files:
+            print("Hiçbir segment indirilemedi.")
+            return
 
-        # ----------------------------------------------------
-        # 6. ESKİ DVR + YENİ SEGMENTLERİ BİRLEŞTİR
-        # ----------------------------------------------------
-        all_entries = list(
-            old_entries
-        )
+        # 5. M3U8'e yalnızca başarıyla indirilen segmentleri ekle
+        playlist_entries = []
 
-        # Kaynak playlist sırası korunur.
-        for filename, url, duration in new_items:
+        for index, segment in enumerate(segments):
+            sequence_number = media_sequence + index
+
+            filename = (
+                f"seg_{sequence_number}.ts"
+            )
+
             if filename in successful_files:
-                all_entries.append(
+                playlist_entries.append(
                     {
-                        "duration": duration,
+                        "sequence": sequence_number,
+                        "duration": segment["duration"],
                         "filename": filename
                     }
                 )
 
-        # Aynı dosyanın iki kez eklenmesini engelle
-        unique_entries = []
-        seen_files = set()
-
-        for entry in all_entries:
-            filename = entry["filename"]
-
-            if filename not in seen_files:
-                seen_files.add(
-                    filename
-                )
-
-                unique_entries.append(
-                    entry
-                )
-
-        all_entries = unique_entries
-
-        # ----------------------------------------------------
-        # 7. SADECE SON MAX_SEGMENTS KADARINI KORU
-        # ----------------------------------------------------
-        if len(all_entries) > MAX_SEGMENTS:
-            all_entries = all_entries[
-                -MAX_SEGMENTS:
-            ]
-
-        if not all_entries:
-            print(
-                "DVR için kullanılabilir "
-                "segment yok."
-            )
+        if not playlist_entries:
+            print("M3U8 için geçerli segment yok.")
             return
 
-        # ----------------------------------------------------
-        # 8. YENİ DVR PLAYLIST'INI YAZ
-        # ----------------------------------------------------
-        success = write_playlist(
-            all_entries,
-            target_duration
+        # İlk başarılı segmentin gerçek sıra numarası
+        first_sequence = (
+            playlist_entries[0]["sequence"]
         )
 
-        if not success:
-            return
+        # 6. Yeni M3U8 dosyasını oluştur
+        with open(
+            M3U8_FILENAME,
+            "w",
+            encoding="utf-8"
+        ) as f:
 
-        # ----------------------------------------------------
-        # 9. SADECE PLAYLIST'TE OLMAYAN ÇOK ESKİ
-        #    SEGMENTLERİ SİL
-        # ----------------------------------------------------
-        valid_files = {
+            f.write("#EXTM3U\n")
+            f.write("#EXT-X-VERSION:3\n")
+
+            f.write(
+                f"#EXT-X-TARGETDURATION:"
+                f"{target_duration}\n"
+            )
+
+            f.write(
+                f"#EXT-X-MEDIA-SEQUENCE:"
+                f"{first_sequence}\n"
+            )
+
+            # Gerçek EXTINF sürelerini yaz
+            for entry in playlist_entries:
+                f.write(
+                    f"#EXTINF:"
+                    f"{entry['duration']},\n"
+                )
+
+                f.write(
+                    f"{BASE_URL}"
+                    f"{entry['filename']}\n"
+                )
+
+        # 7. Eski segmentleri temizle
+        current_files = {
             entry["filename"]
-            for entry in all_entries
+            for entry in playlist_entries
         }
 
-        clean_old_segments(
-            valid_files
-        )
+        clean_old_segments(current_files)
 
-        # Toplam DVR süresini hesapla
-        total_duration = sum(
-            entry["duration"]
-            for entry in all_entries
-        )
-
-        total_hours = (
-            total_duration / 3600
+        print(
+            f"Başarılı: "
+            f"{len(playlist_entries)} segment yazıldı."
         )
 
         print(
-            "================================="
-        )
-
-        print(
-            f"Toplam DVR segmenti: "
-            f"{len(all_entries)}"
-        )
-
-        print(
-            f"Yaklaşık DVR geçmişi: "
-            f"{total_hours:.2f} saat"
-        )
-
-        print(
-            "DVR playlist başarıyla "
-            "güncellendi."
-        )
-
-        print(
-            "================================="
+            f"MEDIA-SEQUENCE: "
+            f"{first_sequence}"
         )
 
     except Exception as error:
-        print(
-            f"Genel hata: {error}"
-        )
-
+        print(f"Genel hata: {error}")
 
 if __name__ == "__main__":
     main()
+    

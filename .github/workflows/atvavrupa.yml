@@ -1,17 +1,22 @@
-name: ATV Avrupa M3U8 Güncelle
+name: ATV Avrupa Stream
 
 on:
   workflow_dispatch:
 
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: atvavrupa-stream
+  cancel-in-progress: false
+
 jobs:
-  update:
+  stream:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
 
     steps:
       - name: Depoyu indir
@@ -22,25 +27,34 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Gerekli paketleri kur
+      - name: Paketleri kur
         run: |
           python -m pip install --upgrade pip
-          pip install streamlink
+          pip install requests streamlink
 
-      - name: M3U8 bağlantısını güncelle
-        run: python atvavrupa.py
+      - name: Yayını sürekli takip et
+        run: |
+          timeout 340m python atvavrupa.py
+        continue-on-error: true
 
-      - name: Değişiklikleri GitHub'a gönder
+      - name: Değişiklikleri kaydet
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add streams/atvavrupa.m3u8
+          git add streams/
 
           if git diff --cached --quiet; then
             echo "Değişiklik yok."
           else
-            git commit -m "ATV Avrupa M3U8 güncellendi"
-            git pull --rebase origin main
-            git push origin main
+            git commit -m "ATV Avrupa yayın güncellemesi"
+
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push origin main && exit 0
+
+              echo "Push tekrar deneniyor..."
+              sleep 5
+            done
+
+            exit 1
           fi

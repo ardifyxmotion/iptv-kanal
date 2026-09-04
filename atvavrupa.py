@@ -1,81 +1,51 @@
-import asyncio
+import subprocess
 import requests
-from playwright.async_api import async_playwright
 
 LIVE_PAGE = "https://www.atvavrupa.tv/canli-yayin"
 OUTPUT_FILE = "atvavrupa_576p.m3u8"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": LIVE_PAGE,
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
 
-async def find_m3u8():
-    found_urls = []
+REQUEST_TIMEOUT = 30
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True
-        )
 
-        page = await browser.new_page(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        )
+def get_stream_url():
+    print("Güncel yayın URL'si aranıyor...")
 
-        def check_request(request):
-            url = request.url
-
-            if ".m3u8" in url.lower():
-                if url not in found_urls:
-                    print(f"M3U8 bulundu: {url}")
-                    found_urls.append(url)
-
-        page.on("request", check_request)
-
-        print("ATV Avrupa canlı yayın sayfası açılıyor...")
-
-        await page.goto(
+    result = subprocess.run(
+        [
+            "streamlink",
+            "--stream-url",
             LIVE_PAGE,
-            wait_until="domcontentloaded",
-            timeout=60000
-        )
+            "best"
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60
+    )
 
-        print("Yayın bağlantısı aranıyor...")
+    stream_url = result.stdout.strip()
 
-        await page.wait_for_timeout(15000)
+    if not stream_url.startswith("http"):
+        print(result.stderr)
+        raise Exception("Streamlink yayın URL'sini bulamadı.")
 
-        await browser.close()
-
-    if not found_urls:
-        return None
-
-    for url in found_urls:
-        if "atvavrupa" in url.lower():
-            return url
-
-    return found_urls[0]
+    print("Güncel yayın URL'si bulundu.")
+    return stream_url
 
 
-async def main():
-    m3u8_url = await find_m3u8()
-
-    if not m3u8_url:
-        raise Exception(
-            "Sayfa yüklenirken herhangi bir M3U8 bağlantısı bulunamadı."
-        )
-
-    print("\nPlaylist indiriliyor...")
+def download_playlist(stream_url):
+    print("M3U8 playlist indiriliyor...")
 
     response = requests.get(
-        m3u8_url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
-            ),
-            "Referer": LIVE_PAGE
-        },
-        timeout=30
+        stream_url,
+        headers=HEADERS,
+        timeout=REQUEST_TIMEOUT
     )
 
     response.raise_for_status()
@@ -84,15 +54,26 @@ async def main():
 
     if not playlist.startswith("#EXTM3U"):
         raise Exception(
-            "Bulunan bağlantı geçerli bir M3U8 playlist döndürmedi."
+            "Geçerli bir M3U8 playlist alınamadı."
         )
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
+    return playlist
+
+
+def main():
+    stream_url = get_stream_url()
+
+    playlist = download_playlist(stream_url)
+
+    with open(
+        OUTPUT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
         file.write(playlist + "\n")
 
-    print("\nBaşarılı!")
-    print(f"{OUTPUT_FILE} güncellendi.")
+    print(f"{OUTPUT_FILE} başarıyla güncellendi.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

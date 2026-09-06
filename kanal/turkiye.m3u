@@ -45,7 +45,7 @@ https://uycyyuuzyh.turknet.ercdn.net/nphindgytw/nowtv/nowtv.m3u8
 https://tv8.daioncdn.net/tv8/tv8.m3u8?app=7ddc255a-ef47-4e81-ab14-c0e5f2949788
 
 #EXTINF:-1 tvg-name="teve2" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tv2tr.png" group-title="Ulusal Kanallar",teve2
-http://live.duhnet.tv/S2/HLS_LIVE/teve2np/playlist.m3u8
+https://demiroren.daioncdn.net/teve2/teve2_1080p.m3u8?&sid=8c6cymtzt94w&app=6aab838a-437e-4a1b-bbd0-e30f79cdbbbd&ce=3
 
 #EXTINF:-1 tvg-name="A2" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/a2tr.png" group-title="Ulusal Kanallar",A2
 https://rnttwmjcin.turknet.ercdn.net/lcpmvefbyo/a2tv/a2tv.m3u8

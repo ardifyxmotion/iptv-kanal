@@ -92,3 +92,6 @@ http://nexusconnects.org:80/play/live.php?mac=00:1A:79:A2:C4:FD&stream=1472919&e
 
 #EXTINF:-1 tvg-name="ŞABAN TV" group-title="Nostalji ve Özel",ŞABAN TV
 https://stream41.radyotelekom.com.tr/stream/m3u8/a94fc44623d98b825183db41afd87634/a94fc44623d98b825183db41afd87634.m3u8
+
+#EXTINF:-1 tvg-name="AŞKI MEMNU",AŞKI MEMNU
+https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/refs/heads/main/aski-memnu.m3u8

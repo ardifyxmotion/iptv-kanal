@@ -1,0 +1,46 @@
+name: TMB
+
+on:
+schedule:
+- cron: "*/15 * * * *"
+workflow_dispatch:
+
+permissions:
+contents: write
+
+jobs:
+tmb:
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Depoyu indir
+    uses: actions/checkout@v4
+
+  - name: Python kur
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.x"
+
+  - name: Gerekli kütüphaneleri kur
+    run: |
+      pip install requests
+
+  - name: TMB listesini oluştur
+    run: |
+      python tmb.py > tmb.m3u8
+
+  - name: Değişiklikleri GitHub'a kaydet
+    run: |
+      git config --global user.name "github-actions[bot]"
+      git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      git add tmb.m3u8
+
+      if git diff --cached --quiet; then
+        echo "Değişiklik bulunamadı."
+      else
+        git commit -m "TMB playlist updated"
+        git push origin main
+      fi
+```

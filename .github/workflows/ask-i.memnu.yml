@@ -3,7 +3,6 @@ name: YouTube M3U8 Güncelleme
 on:
   schedule:
     - cron: "0 */4 * * *"
-
   workflow_dispatch:
 
 permissions:
@@ -27,10 +26,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -U yt-dlp
 
+      - name: YouTube çerezleri oluşturuluyor
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          printf '%s' "$YOUTUBE_COOKIES" > cookies.txt
+
       - name: M3U8 bağlantısı güncelleniyor
         run: python youtube_m3u8.py
 
+      - name: Geçici dosya siliniyor
+        if: always()
+        run: rm -f cookies.txt
+
       - name: Değişiklikler GitHub'a gönderiliyor
+        if: success()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"

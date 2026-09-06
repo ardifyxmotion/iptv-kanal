@@ -1,6 +1,6 @@
 name: TMB
 
-on:
+"on":
 schedule:
 - cron: "*/15 * * * *"
 workflow_dispatch:
@@ -23,12 +23,10 @@ steps:
       python-version: "3.x"
 
   - name: Gerekli kütüphaneleri kur
-    run: |
-      pip install requests
+    run: pip install requests
 
   - name: TMB listesini oluştur
-    run: |
-      python tmb.py > tmb.m3u8
+    run: python tmb.py > tmb.m3u8
 
   - name: Değişiklikleri GitHub'a kaydet
     run: |

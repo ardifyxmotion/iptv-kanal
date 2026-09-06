@@ -1,0 +1,3 @@
+#EXTM3U
+#EXTINF:-1 tvg-name="TMB",TMB
+https://str.yodacdn.net/tmb_tr_app/tracks-v1a1/mono.ts.m3u8?token=tmb_app_token_13579

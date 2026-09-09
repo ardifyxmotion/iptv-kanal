@@ -44,7 +44,7 @@ https://uycyyuuzyh.turknet.ercdn.net/nphindgytw/nowtv/nowtv.m3u8
 #EXTINF:-1 tvg-name="TV8" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tv8tr.png" group-title="Ulusal Kanallar",TV8
 https://tv8.daioncdn.net/tv8/tv8.m3u8?app=7ddc255a-ef47-4e81-ab14-c0e5f2949788
 
-#EXTINF:-1 tvg-name="TV8,5" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tv8tr.png" group-title="Ulusal Kanallar",TV8,5
+#EXTINF:-1 tvg-name="TV8,5" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tv85tr.png" group-title="Ulusal Kanallar",TV8,5
 https://tv8.daioncdn.net/tv8bucuk/tv8bucuk_1080p.m3u8?app=tv8bucuk_web&ce=3?token=m98huMSvPul5ZcUf5IjhUA&tms=1767241867
 
 #EXTINF:-1 tvg-name="teve2" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tv2tr.png" group-title="Ulusal Kanallar",teve2
@@ -52,6 +52,9 @@ https://demiroren.daioncdn.net/teve2/teve2_1080p.m3u8?&sid=8c6cymtzt94w&app=6aab
 
 #EXTINF:-1 tvg-name="A2" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/a2tr.png" group-title="Ulusal Kanallar",A2
 https://rnttwmjcin.turknet.ercdn.net/lcpmvefbyo/a2tv/a2tv.m3u8
+
+#EXTINF:-1 tvg-name="360" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/360-tr.png" group-title="Ulusal Kanallar",360
+https://turkmedya-live.ercdn.net/tv360/tv360_720p.m3u8
 
 # MÜZİK KANALLARI
 

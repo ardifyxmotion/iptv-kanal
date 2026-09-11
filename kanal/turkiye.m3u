@@ -91,6 +91,9 @@ https://cdn-4turkpop.yayin.com.tr/4turkpop/4turkpop/playlist.m3u8
 #EXTINF:-1 tvg-name="TMB" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/tmbtr.png" group-title="Müzik",TMB
 https://str.yodacdn.net/tmb_tr_app/tracks-v1a1/mono.ts.m3u8?token=tmb_app_token_13579
 
+#EXTINF:-1 tvg-name="Teleon" group-title="Müzik",Teleon
+https://cdn-teleonchannels.yayin.com.tr/teleonchannels/teleonchannels/chunklist_w1585865547.m3u8
+
 # NOSTALJİ VE ÖZEL
 
 #EXTINF:-1 tvg-name="CENNET MAHALLESİ" group-title="Nostalji ve Özel",CENNET MAHALLESİ

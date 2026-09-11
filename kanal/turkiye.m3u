@@ -94,6 +94,29 @@ https://str.yodacdn.net/tmb_tr_app/tracks-v1a1/mono.ts.m3u8?token=tmb_app_token_
 #EXTINF:-1 tvg-name="Teleon" group-title="Müzik",Teleon
 https://cdn-teleonchannels.yayin.com.tr/teleonchannels/teleonchannels/chunklist_w1585865547.m3u8
 
+#EXTINF:-1 tvg-name="Damar TV" group-title="Müzik",Damar TV
+https://livetv.work/play/tr/damartv.php
+
+#EXTINF:-1 tvg-name="Ezo TV" group-title="Müzik",Ezo TV
+https://livetv.work/play/tr/ezotv.php
+
+#EXTINF:-1 tvg-name="Arma TV" group-title="Müzik",Arma TV
+https://livetv.work/play/tr/armatv.php
+
+#EXTINF:-1 tvg-name="Sıla TV" group-title="Müzik",Sıla TV
+https://livetv.work/play/tr/silatv.php
+
+#EXTINF:-1 tvg-name="Güçlü TV" group-title="Müzik",Güçlü TV
+https://yayin.santraltr.com/hls/zeynotv.m3u8
+
+#EXTINF:-1 tvg-name="Viva TV" group-title="Müzik",Viva TV
+https://livetv.work/play/tr/vivatv.php
+
+#EXTINF:-1 tvg-name="Genç SMS TV" group-title="Müzik",Genç SMS TV
+https://livetv.work/play/tr/gencsmstv.php
+
+
+
 # NOSTALJİ VE ÖZEL
 
 #EXTINF:-1 tvg-name="CENNET MAHALLESİ" group-title="Nostalji ve Özel",CENNET MAHALLESİ

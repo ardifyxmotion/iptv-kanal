@@ -9,7 +9,7 @@ https://trt.daioncdn.net/trt-1/master_1080p.m3u8?&sid=7lt9umlk1uqx&app=ed3904e8-
 https://rmtftbjlne.turknet.ercdn.net/bpeytmnqyp/showmax/showmax.m3u8
 
 #EXTINF:-1 tvg-name="ShowTürk" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/showturktr.png" group-title="Ulusal Kanallar",ShowTürk
-https://flask-stream-shturk-cinerlive.onrender.com/hls_stream/master.m3u8
+https://raw.githubusercontent.com/bnyusuf67-crypto/bnyusuf67-crypto.github.io/refs/heads/main/streams/shturk.m3u8
 
 #EXTINF:-1 tvg-name="Show TV" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/showtr.png" group-title="Ulusal Kanallar",Show TV
 https://ciner.daioncdn.net/showtv/showtv.m3u8?ce=3&app=4bc856ef-4c68-4a94-bc87-37dfaaa66558

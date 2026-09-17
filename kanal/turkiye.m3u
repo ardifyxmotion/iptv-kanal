@@ -24,7 +24,7 @@ http://live.duhnet.tv/S2/HLS_LIVE/eurodnp/playlist.m3u8
 https://turkuaz.tecostream.xyz/atv?m3u8
 
 #EXTINF:-1 tvg-name="ATV Avrupa" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/atvavrupa.png" group-title="Ulusal Kanallar",ATV Avrupa
-https://get-atvavrupa-streams.onrender.com/hls_stream/master.m3u8
+http://line.tivi-one.net:80/play/live.php?mac=00:1A:79:88:CC:0E&stream=196666&extension=ts&play_token=mVvbrNqoax
 
 #EXTINF:-1 tvg-name="Star TV" tvg-logo="https://raw.githubusercontent.com/ardifyxmotion/iptv-kanal/main/kanal/logos/startvtr.png" group-title="Ulusal Kanallar",Star TV
 https://dogus.daioncdn.net/startv/startv_720p.m3u8?app=a20ac41e-bdc3-4aa1-934d-26b484480ac9&ce=3&sid=8l4w3lst4co5
